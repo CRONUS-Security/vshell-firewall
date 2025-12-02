@@ -2,8 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -41,43 +39,64 @@ func main() {
 func handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	// 设置读取超时，避免恶意连接占用资源
-	clientConn.SetReadDeadline(time.Now().Add(10 * time. Second))
+	// 设置初始读取超时（30秒），防止恶意空连接占用资源
+	clientConn.SetReadDeadline(time.Now().Add(30 * time.Second))
 
-	// 读取初始数据
+	// 读取初始数据块（最多4KB用于检测）
 	reader := bufio.NewReader(clientConn)
-	firstLine, err := reader.ReadBytes('\n')
+	buf := make([]byte, 4096)
+	n, err := reader.Read(buf)
 	if err != nil {
-		log.Printf("Error reading first line: %v", err)
+		log.Printf("Error reading initial data: %v", err)
 		return
 	}
+	initialData := buf[:n]
+
+	// 读取到数据后，立即移除超时限制，支持长连接
+	clientConn.SetReadDeadline(time.Time{})
 
 	// 尝试解析为 HTTP 请求
-	if isHTTPRequest(firstLine) {
-		// 重置读取超时
-		clientConn.SetReadDeadline(time.Time{})
-		
-		// 解析 HTTP 请求行
-		requestLine := string(firstLine)
-		path := extractHTTPPath(requestLine)
+	if isHTTPRequest(initialData) {
+		// 查找第一行（请求行）
+		firstLineEnd := findFirstLine(initialData)
+		if firstLineEnd > 0 {
+			requestLine := string(initialData[:firstLineEnd])
+			path := extractHTTPPath(requestLine)
 
-		// 检查是否是 /slt 路径
-		if path == "/slt" {
-			log.Printf("Blocked /slt request from %s", clientConn.RemoteAddr())
-			send404Response(clientConn)
-			return
+			// 检查是否是 /slt 路径
+			if path == "/slt" {
+				log.Printf("Blocked /slt request from %s", clientConn.RemoteAddr())
+				send404Response(clientConn)
+				return
+			}
+
+			// 检查是否是 /swt 路径
+			if path == "/swt" {
+				log.Printf("Blocked /swt request from %s", clientConn.RemoteAddr())
+				send404Response(clientConn)
+				return
+			}
+
+			log.Printf("Forwarding HTTP request: %s from %s", strings.TrimSpace(requestLine), clientConn.RemoteAddr())
+		} else {
+			log.Printf("Forwarding HTTP request from %s", clientConn.RemoteAddr())
 		}
-
-		log.Printf("Forwarding HTTP request: %s from %s", strings.TrimSpace(requestLine), clientConn. RemoteAddr())
-		forwardHTTPRequest(clientConn, reader, firstLine)
+		forwardHTTPRequest(clientConn, reader, initialData)
 	} else {
-		// 重置读取超时
-		clientConn.SetReadDeadline(time.Time{})
-		
 		// 作为 raw TCP 转发
-		log.Printf("Forwarding raw TCP connection from %s", clientConn. RemoteAddr())
-		forwardRawTCP(clientConn, reader, firstLine)
+		log.Printf("Forwarding raw TCP connection from %s", clientConn.RemoteAddr())
+		forwardRawTCP(clientConn, reader, initialData)
 	}
+}
+
+// 查找第一行的结束位置
+func findFirstLine(data []byte) int {
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			return i
+		}
+	}
+	return -1
 }
 
 // 判断是否是 HTTP 请求
@@ -114,18 +133,18 @@ func send404Response(conn net.Conn) {
 }
 
 // 转发 HTTP 请求
-func forwardHTTPRequest(clientConn net.Conn, reader *bufio.Reader, firstLine []byte) {
+func forwardHTTPRequest(clientConn net.Conn, reader *bufio.Reader, initialData []byte) {
 	// 连接后端
-	backendConn, err := net. DialTimeout("tcp", BACKEND_ADDR, 5*time.Second)
+	backendConn, err := net.Dial("tcp", BACKEND_ADDR)
 	if err != nil {
-		log. Printf("Failed to connect to backend: %v", err)
+		log.Printf("Failed to connect to backend: %v", err)
 		send502Response(clientConn)
 		return
 	}
 	defer backendConn.Close()
 
-	// 发送第一行
-	if _, err := backendConn.Write(firstLine); err != nil {
+	// 发送初始数据
+	if _, err := backendConn.Write(initialData); err != nil {
 		log.Printf("Error writing to backend: %v", err)
 		return
 	}
@@ -152,17 +171,17 @@ func forwardHTTPRequest(clientConn net.Conn, reader *bufio.Reader, firstLine []b
 }
 
 // 转发原始 TCP 连接
-func forwardRawTCP(clientConn net.Conn, reader *bufio.Reader, firstData []byte) {
+func forwardRawTCP(clientConn net.Conn, reader *bufio.Reader, initialData []byte) {
 	// 连接后端
-	backendConn, err := net. DialTimeout("tcp", BACKEND_ADDR, 5*time. Second)
+	backendConn, err := net.Dial("tcp", BACKEND_ADDR)
 	if err != nil {
 		log.Printf("Failed to connect to backend: %v", err)
 		return
 	}
 	defer backendConn.Close()
 
-	// 发送第一块数据
-	if _, err := backendConn.Write(firstData); err != nil {
+	// 发送初始数据
+	if _, err := backendConn.Write(initialData); err != nil {
 		log.Printf("Error writing to backend: %v", err)
 		return
 	}
