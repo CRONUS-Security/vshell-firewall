@@ -1,0 +1,35 @@
+[Unit]
+Description=SLT Proxy - TCP Proxy with HTTP Filtering
+Documentation=https://github.com/yourusername/vshell-firewall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# 二进制文件路径
+ExecStart=/usr/local/bin/slt-proxy
+
+# 自动重启配置
+Restart=always
+RestartSec=5s
+
+# 标准输出和错误输出
+StandardOutput=journal
+StandardError=journal
+
+# 安全配置
+NoNewPrivileges=true
+PrivateTmp=true
+
+# 资源限制
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# 工作目录
+WorkingDirectory=/tmp
+
+[Install]
+WantedBy=multi-user.target
