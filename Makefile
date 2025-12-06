@@ -3,7 +3,7 @@
 # 变量定义
 BINARY_NAME=slt-proxy
 BUILD_DIR=build
-MAIN_FILE=main.go
+SOURCE_FILES=$(wildcard *.go)
 INSTALL_PATH=/usr/local/bin
 SERVICE_FILE=slt-proxy.service
 SERVICE_PATH=/etc/systemd/system
@@ -27,7 +27,7 @@ all: clean build
 build:
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_FILE)
+	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(SOURCE_FILES)
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
 
 # 编译（带版本信息）
@@ -36,7 +36,7 @@ build-with-version:
 	@echo "Building $(BINARY_NAME) with version info..."
 	@mkdir -p $(BUILD_DIR)
 	go build -ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)" \
-		-o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_FILE)
+		-o $(BUILD_DIR)/$(BINARY_NAME) $(SOURCE_FILES)
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
 
 # 交叉编译 Linux amd64
@@ -44,7 +44,7 @@ build-with-version:
 build-linux:
 	@echo "Building for Linux amd64..."
 	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(MAIN_FILE)
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(SOURCE_FILES)
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64"
 
 # 交叉编译 Linux arm64
@@ -52,7 +52,7 @@ build-linux:
 build-linux-arm64:
 	@echo "Building for Linux arm64..."
 	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(MAIN_FILE)
+	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(SOURCE_FILES)
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64"
 
 # 编译所有平台

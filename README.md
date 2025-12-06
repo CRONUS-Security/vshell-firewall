@@ -1,190 +1,388 @@
 # vshell-firewall
 
-A lightweight TCP proxy with HTTP filtering capabilities for blocking specific paths.
+一个灵活、高性能的 TCP 代理服务，支持 HTTP 路径过滤和多端口监听。
 
-## Features
+## 特性
 
-- 🚀 High-performance TCP proxy
-- 🔒 HTTP path filtering (blocks `/slt` by default)
-- 🔄 Supports both HTTP and raw TCP connections
-- ⚡ Long-lived TCP connection support
-- 🛡️ Protection against idle connections with timeout
-- 📊 Connection logging
+- 🚀 **高性能** - 高效的 TCP 代理转发
+- 🔌 **多端口监听** - 支持同时监听多个端口，各自独立配置
+- 🔒 **灵活的路由规则** - 基于路径的访问控制（允许/拒绝）
+- 🔄 **协议自动检测** - 自动识别 HTTP 和原始 TCP 流量
+- ⚡ **长连接支持** - 可配置的超时策略，支持长期 TCP 连接
+- 🛡️ **恶意连接防护** - 可选的初始超时防止空连接占用资源
+- 📊 **详细日志** - 可配置的日志级别和连接跟踪
+- 📝 **TOML 配置** - 人性化的配置文件格式
 
-## Architecture
+## 架构
 
 ```
-Client --> vshell-firewall (Port 8880) --> Backend Service (Port 9991)
+Client --> vshell-firewall (多端口) --> Backend Services
+           Port 8880 -----> Backend:9991
+           Port 9880 -----> Backend:9992
+           Port 7880 -----> Backend:8000
 ```
 
-The proxy listens on port 8880 and forwards traffic to backend service on port 9991, with the ability to inspect and block specific HTTP requests.
+代理服务可以同时监听多个端口，每个端口都有独立的：
+- 后端服务地址
+- 协议类型（auto/http/tcp）
+- 超时配置
+- 路由规则
 
-## Requirements
+## 快速开始
 
-- Go 1.16 or higher
-- Linux (for systemd service)
-
-## Quick Start
-
-### Build
+### 1. 编译
 
 ```bash
-# Build the binary
+# 构建二进制文件
 make build
 
-# Build with version information
+# 或者构建带版本信息的
 make build-with-version
-
-# Build for all platforms
-make build-all
 ```
 
-### Run Directly
+### 2. 配置
+
+复制示例配置文件并编辑：
 
 ```bash
-# Build and run
-make run
+cp config.toml.example config.toml
+vim config.toml
+```
 
-# Or run the binary directly
+基本配置示例：
+
+```toml
+[global]
+buffer_size = 32768
+log_level = "info"
+
+[[listeners]]
+name = "my_proxy"
+listen_port = ":8880"
+backend_addr = "127.0.0.1:9991"
+protocol = "auto"
+
+[listeners.timeout]
+enabled = true
+initial_read = 30
+connect_backend = 5
+
+[[listeners.routes]]
+path = "/admin"
+action = "drop"
+response = "403"
+
+[[listeners.routes]]
+path = "/"
+action = "allow"
+```
+
+### 3. 运行
+
+```bash
+# 直接运行
 ./build/slt-proxy
+
+# 指定配置文件
+./build/slt-proxy -config /path/to/config.toml
+
+# 查看版本
+./build/slt-proxy -version
 ```
 
-### Install as System Service
+### 4. 安装为系统服务
 
 ```bash
-# Install binary and systemd service
-make install-service
+# 安装二进制文件和 systemd 服务
+sudo make install-service
 
-# Start the service
-make start
+# 启动服务
+sudo make start
 
-# Enable on boot
-make enable
-
-# Check status
-make status
-
-# View logs
-make logs
+# 开机自启
+sudo make enable
 ```
 
-## Configuration
+## 配置说明
 
-Edit the constants in `main.go`:
+### 全局配置
 
-```go
-const (
-    LISTEN_PORT  = ":8880"           // Port to listen on
-    BACKEND_ADDR = "127.0.0.1:9991"  // Backend service address
-    BUFFER_SIZE  = 32768             // Buffer size (32KB)
-)
+```toml
+[global]
+buffer_size = 32768  # 缓冲区大小（字节）
+log_level = "info"   # 日志级别：debug, info, warn, error
 ```
 
-To block different paths, modify the path check in `handleConnection()` function.
+### 监听器配置
 
-## Makefile Targets
+每个监听器可以独立配置：
+
+```toml
+[[listeners]]
+name = "listener_name"           # 监听器名称（用于日志）
+listen_port = ":8880"            # 监听端口
+backend_addr = "127.0.0.1:9991"  # 后端服务地址
+protocol = "auto"                # 协议：auto, http, tcp
+```
+
+**协议类型说明：**
+- `auto` - 自动检测 HTTP 或 TCP
+- `http` - 强制作为 HTTP 处理
+- `tcp` - 强制作为原始 TCP 处理（跳过 HTTP 检测）
+
+### 超时配置
+
+```toml
+[listeners.timeout]
+enabled = true       # 是否启用超时
+initial_read = 30    # 初始读取超时（秒），0 = 无限制
+connect_backend = 5  # 连接后端超时（秒），0 = 无限制
+```
+
+**超时策略：**
+- `enabled = true` - 初始读取有超时，数据到达后移除超时（防护 + 长连接）
+- `enabled = false` - 完全无超时（纯长连接）
+
+### 路由规则
+
+路由规则按顺序匹配，支持前缀匹配：
+
+```toml
+[[listeners.routes]]
+path = "/admin"      # 路径（前缀匹配）
+action = "drop"      # 动作：drop 或 allow
+response = "403"     # drop 时的响应：404, 403, 502, close
+```
+
+**响应类型：**
+- `404` - 返回 404 Not Found
+- `403` - 返回 403 Forbidden
+- `502` - 返回 502 Bad Gateway
+- `close` - 直接关闭连接（不响应）
+
+**规则示例：**
+
+```toml
+# 拒绝特定路径
+[[listeners.routes]]
+path = "/admin"
+action = "drop"
+response = "403"
+
+# 允许 API
+[[listeners.routes]]
+path = "/api"
+action = "allow"
+
+# 默认拒绝其他所有请求
+[[listeners.routes]]
+path = "/"
+action = "drop"
+response = "404"
+```
+
+## 使用场景
+
+### 场景 1: HTTP 反向代理 + 路径过滤
+
+```toml
+[[listeners]]
+name = "web_proxy"
+listen_port = ":8880"
+backend_addr = "127.0.0.1:8000"
+protocol = "http"
+
+[listeners.timeout]
+enabled = true
+initial_read = 30
+connect_backend = 5
+
+[[listeners.routes]]
+path = "/slt"
+action = "drop"
+response = "404"
+
+[[listeners.routes]]
+path = "/admin"
+action = "drop"
+response = "403"
+
+[[listeners.routes]]
+path = "/"
+action = "allow"
+```
+
+### 场景 2: 纯 TCP 长连接转发（无超时）
+
+```toml
+[[listeners]]
+name = "tcp_longconn"
+listen_port = ":9880"
+backend_addr = "127.0.0.1:9992"
+protocol = "tcp"
+
+[listeners.timeout]
+enabled = false  # 完全无超时
+
+[[listeners.routes]]
+path = "/"
+action = "allow"
+```
+
+### 场景 3: 多端口，混合模式
+
+```toml
+# HTTP 代理（端口 8880）
+[[listeners]]
+name = "http_proxy"
+listen_port = ":8880"
+backend_addr = "127.0.0.1:9991"
+protocol = "auto"
+
+[listeners.timeout]
+enabled = true
+initial_read = 30
+
+[[listeners.routes]]
+path = "/blocked"
+action = "drop"
+response = "404"
+
+[[listeners.routes]]
+path = "/"
+action = "allow"
+
+# TCP 长连接（端口 9880）
+[[listeners]]
+name = "tcp_proxy"
+listen_port = ":9880"
+backend_addr = "127.0.0.1:9992"
+protocol = "tcp"
+
+[listeners.timeout]
+enabled = false
+
+[[listeners.routes]]
+path = "/"
+action = "allow"
+```
+
+## Makefile 命令
 
 ```bash
-make help          # Show all available targets
-make build         # Build the binary
-make run           # Build and run
-make install       # Install binary to /usr/local/bin
-make install-service  # Install systemd service
-make start         # Start the service
-make stop          # Stop the service
-make restart       # Restart the service
-make status        # Show service status
-make logs          # Follow service logs
-make enable        # Enable on boot
-make disable       # Disable on boot
-make uninstall     # Remove binary and service
-make clean         # Clean build directory
+make help          # 显示所有可用命令
+make build         # 编译二进制文件
+make run           # 编译并运行
+make test          # 运行测试
+make fmt           # 格式化代码
+make vet           # 代码检查
+make tidy          # 整理依赖
+
+# 安装和服务管理
+make install       # 安装到 /usr/local/bin
+make install-service  # 安装 systemd 服务
+make start         # 启动服务
+make stop          # 停止服务
+make restart       # 重启服务
+make status        # 查看服务状态
+make logs          # 查看服务日志
+make enable        # 开机自启
+make disable       # 禁用自启
+make uninstall     # 卸载
+
+# 交叉编译
+make build-linux       # Linux amd64
+make build-linux-arm64 # Linux arm64
+make build-all         # 所有平台
+
+# 清理
+make clean         # 清理构建产物
 ```
 
-## Service Management
+## 系统服务管理
 
-After installing as a service:
+安装为服务后：
 
 ```bash
-# Start
+# 启动
 sudo systemctl start slt-proxy
 
-# Stop
+# 停止
 sudo systemctl stop slt-proxy
 
-# Restart
+# 重启
 sudo systemctl restart slt-proxy
 
-# Status
+# 状态
 sudo systemctl status slt-proxy
 
-# View logs
+# 查看日志
 sudo journalctl -u slt-proxy -f
 
-# Enable on boot
+# 开机自启
 sudo systemctl enable slt-proxy
 
-# Disable on boot
+# 禁用自启
 sudo systemctl disable slt-proxy
 ```
 
-## How It Works
+## 日志示例
 
-1. **Connection Handling**: Accepts incoming connections with a 30-second initial timeout
-2. **Protocol Detection**: Reads the first 4KB to detect if it's HTTP or raw TCP
-3. **Path Filtering**: For HTTP requests, checks if the path matches blocked patterns
-4. **Proxying**: Forwards allowed traffic to backend with bi-directional streaming
-5. **Long Connection Support**: After initial data exchange, removes timeouts for long-lived connections
+```
+2025/12/06 04:00:00 Loaded config with 2 listener(s)
+2025/12/06 04:00:00 All listeners started
+2025/12/06 04:00:00 [http_proxy] Listening on :8880, forwarding to 127.0.0.1:9991 (protocol: auto, timeout: true)
+2025/12/06 04:00:00 [tcp_proxy] Listening on :9880, forwarding to 127.0.0.1:9992 (protocol: tcp, timeout: false)
+2025/12/06 04:00:10 [http_proxy] Blocked request to '/admin' from 192.168.1.100:45678 (response: 403)
+2025/12/06 04:00:15 [http_proxy] Forwarding HTTP request: GET /api/data HTTP/1.1 from 192.168.1.101:45679
+2025/12/06 04:00:20 [tcp_proxy] Forwarding raw TCP connection from 192.168.1.102:45680
+```
 
-## Development
+## 工作原理
+
+1. **连接建立** - 客户端连接到指定端口
+2. **初始超时** - 如果启用，设置初始读取超时（防止空连接）
+3. **数据读取** - 读取第一块数据（最多 4KB）
+4. **协议检测** - 根据配置自动检测或强制使用指定协议
+5. **路由匹配** - 对于 HTTP，匹配路径规则；对于 TCP，使用默认规则
+6. **动作执行** - drop（拒绝）或 allow（转发到后端）
+7. **双向转发** - 建立客户端 ↔ 后端的双向流式传输
+8. **长连接支持** - 数据传输后移除超时限制
+
+## 依赖
+
+- Go 1.21+
+- [github.com/BurntSushi/toml](https://github.com/BurntSushi/toml) - TOML 配置解析
+
+## 开发
 
 ```bash
-# Format code
+# 格式化代码
 make fmt
 
-# Run linter
+# 运行检查
 make vet
 
-# Tidy dependencies
+# 整理依赖
 make tidy
 
-# Run tests
-make test
+# 本地测试
+make run
 ```
 
-## Cross Compilation
+## 文件说明
 
-```bash
-# Linux AMD64
-make build-linux
-
-# Linux ARM64
-make build-linux-arm64
-
-# All platforms
-make build-all
-```
-
-## Logging
-
-The proxy logs:
-- Server startup information
-- Blocked requests (with client IP)
-- Forwarding details for both HTTP and raw TCP
-- Connection errors
-
-Example logs:
-```
-2025/12/05 10:00:00 Proxy server listening on :8880, forwarding to 127.0.0.1:9991
-2025/12/05 10:00:10 Blocked /slt request from 192.168.1.100:45678
-2025/12/05 10:00:15 Forwarding HTTP request: GET /api/data HTTP/1.1 from 192.168.1.101:45679
-2025/12/05 10:00:20 Forwarding raw TCP connection from 192.168.1.102:45680
-```
+- `main.go` - 主程序逻辑
+- `config.go` - 配置解析和验证
+- `config.toml` - 默认配置文件
+- `config.toml.example` - 完整配置示例
+- `Makefile` - 构建和部署脚本
+- `slt-proxy.service` - systemd 服务配置
 
 ## License
 
 MIT License
 
-## Contributing
+## 贡献
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+欢迎提交 Issue 和 Pull Request！

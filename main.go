@@ -2,187 +2,207 @@ package main
 
 import (
 	"bufio"
+	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
-const (
-	LISTEN_PORT  = ":8880"
-	BACKEND_ADDR = "127.0.0.1:9991"
-	BUFFER_SIZE  = 32768 // 32KB buffer
+var (
+	configFile = flag.String("config", "config.toml", "配置文件路径")
+	version    = flag.Bool("version", false, "显示版本信息")
+	
+	// 版本信息 (通过 -ldflags 注入)
+	Version   = "dev"
+	BuildTime = "unknown"
+	GitCommit = "unknown"
 )
 
 func main() {
-	listener, err := net.Listen("tcp", LISTEN_PORT)
+	flag.Parse()
+
+	// 显示版本信息
+	if *version {
+		fmt.Printf("slt-proxy version %s\n", Version)
+		fmt.Printf("Build time: %s\n", BuildTime)
+		fmt.Printf("Git commit: %s\n", GitCommit)
+		os.Exit(0)
+	}
+
+	// 加载配置
+	config, err := LoadConfig(*configFile)
 	if err != nil {
-		log. Fatalf("Failed to listen on %s: %v", LISTEN_PORT, err)
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	log.Printf("Loaded config with %d listener(s)", len(config.Listeners))
+
+	// 启动所有监听器
+	var wg sync.WaitGroup
+	for _, listenerConfig := range config.Listeners {
+		wg.Add(1)
+		go func(cfg ListenerConfig) {
+			defer wg.Done()
+			startListener(cfg, config.Global)
+		}(listenerConfig)
+	}
+
+	log.Println("All listeners started")
+	wg.Wait()
+}
+
+// startListener 启动单个监听器
+func startListener(cfg ListenerConfig, global GlobalConfig) {
+	listener, err := net.Listen("tcp", cfg.ListenPort)
+	if err != nil {
+		log.Fatalf("[%s] Failed to listen on %s: %v", cfg.Name, cfg.ListenPort, err)
 	}
 	defer listener.Close()
 
-	log.Printf("Proxy server listening on %s, forwarding to %s", LISTEN_PORT, BACKEND_ADDR)
+	log.Printf("[%s] Listening on %s, forwarding to %s (protocol: %s, timeout: %v)",
+		cfg.Name, cfg.ListenPort, cfg.BackendAddr, cfg.Protocol, cfg.Timeout.Enabled)
 
 	for {
 		clientConn, err := listener.Accept()
 		if err != nil {
-			log.Printf("Failed to accept connection: %v", err)
+			log.Printf("[%s] Failed to accept connection: %v", cfg.Name, err)
 			continue
 		}
 
-		go handleConnection(clientConn)
+		go handleConnection(clientConn, cfg, global)
 	}
 }
 
-func handleConnection(clientConn net.Conn) {
+// handleConnection 处理单个连接
+func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConfig) {
 	defer clientConn.Close()
 
-	// 设置初始读取超时（30秒），防止恶意空连接占用资源
-	clientConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	// 设置初始读取超时
+	if cfg.Timeout.Enabled && cfg.Timeout.InitialRead > 0 {
+		clientConn.SetReadDeadline(time.Now().Add(time.Duration(cfg.Timeout.InitialRead) * time.Second))
+	}
 
 	// 读取初始数据块（最多4KB用于检测）
 	reader := bufio.NewReader(clientConn)
 	buf := make([]byte, 4096)
 	n, err := reader.Read(buf)
 	if err != nil {
-		log.Printf("Error reading initial data: %v", err)
+		if global.LogLevel == "debug" {
+			log.Printf("[%s] Error reading initial data from %s: %v",
+				cfg.Name, clientConn.RemoteAddr(), err)
+		}
 		return
 	}
 	initialData := buf[:n]
 
-	// 读取到数据后，立即移除超时限制，支持长连接
-	clientConn.SetReadDeadline(time.Time{})
+	// 读取到数据后，根据配置决定是否移除超时限制
+	if cfg.Timeout.Enabled && cfg.Timeout.InitialRead > 0 {
+		clientConn.SetReadDeadline(time.Time{}) // 移除超时，支持长连接
+	}
 
-	// 尝试解析为 HTTP 请求
-	if isHTTPRequest(initialData) {
+	// 根据协议类型处理
+	isHTTP := false
+	switch cfg.Protocol {
+	case "http":
+		isHTTP = true
+	case "tcp":
+		isHTTP = false
+	case "auto":
+		isHTTP = isHTTPRequest(initialData)
+	}
+
+	// HTTP 协议处理
+	if isHTTP {
 		// 查找第一行（请求行）
 		firstLineEnd := findFirstLine(initialData)
+		var path string
+		var requestLine string
+
 		if firstLineEnd > 0 {
-			requestLine := string(initialData[:firstLineEnd])
-			path := extractHTTPPath(requestLine)
-
-			// 检查是否是 /slt 路径
-			if path == "/slt" {
-				log.Printf("Blocked /slt request from %s", clientConn.RemoteAddr())
-				send404Response(clientConn)
-				return
-			}
-
-			// 检查是否是 /swt 路径
-			if path == "/swt" {
-				log.Printf("Blocked /swt request from %s", clientConn.RemoteAddr())
-				send404Response(clientConn)
-				return
-			}
-
-			log.Printf("Forwarding HTTP request: %s from %s", strings.TrimSpace(requestLine), clientConn.RemoteAddr())
-		} else {
-			log.Printf("Forwarding HTTP request from %s", clientConn.RemoteAddr())
+			requestLine = string(initialData[:firstLineEnd])
+			path = extractHTTPPath(requestLine)
 		}
-		forwardHTTPRequest(clientConn, reader, initialData)
+
+		// 匹配路由规则
+		route := cfg.MatchRoute(path)
+		if route == nil {
+			// 没有匹配的规则，默认拒绝
+			log.Printf("[%s] No route matched for path '%s' from %s, dropping",
+				cfg.Name, path, clientConn.RemoteAddr())
+			sendErrorResponse(clientConn, "404")
+			return
+		}
+
+		// 执行动作
+		if route.Action == "drop" {
+			log.Printf("[%s] Blocked request to '%s' from %s (response: %s)",
+				cfg.Name, path, clientConn.RemoteAddr(), route.Response)
+			
+			if route.Response != "close" {
+				sendErrorResponse(clientConn, route.Response)
+			}
+			return
+		}
+
+		// 允许通过
+		if global.LogLevel == "debug" || global.LogLevel == "info" {
+			log.Printf("[%s] Forwarding HTTP request: %s from %s",
+				cfg.Name, strings.TrimSpace(requestLine), clientConn.RemoteAddr())
+		}
+		forwardConnection(clientConn, reader, initialData, cfg, global, "HTTP")
 	} else {
-		// 作为 raw TCP 转发
-		log.Printf("Forwarding raw TCP connection from %s", clientConn.RemoteAddr())
-		forwardRawTCP(clientConn, reader, initialData)
-	}
-}
-
-// 查找第一行的结束位置
-func findFirstLine(data []byte) int {
-	for i := 0; i < len(data); i++ {
-		if data[i] == '\n' {
-			return i
+		// 原始 TCP 处理
+		// 对于 TCP，路由匹配使用 "/"
+		route := cfg.MatchRoute("/")
+		if route == nil || route.Action == "drop" {
+			log.Printf("[%s] TCP connection from %s blocked by route rule",
+				cfg.Name, clientConn.RemoteAddr())
+			return
 		}
-	}
-	return -1
-}
 
-// 判断是否是 HTTP 请求
-func isHTTPRequest(data []byte) bool {
-	line := string(data)
-	// 检查是否以 HTTP 方法开头
-	methods := []string{"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "}
-	for _, method := range methods {
-		if strings.HasPrefix(line, method) {
-			return true
+		if global.LogLevel == "debug" || global.LogLevel == "info" {
+			log.Printf("[%s] Forwarding raw TCP connection from %s",
+				cfg.Name, clientConn.RemoteAddr())
 		}
+		forwardConnection(clientConn, reader, initialData, cfg, global, "TCP")
 	}
-	return false
 }
 
-// 提取 HTTP 路径
-func extractHTTPPath(requestLine string) string {
-	parts := strings.Split(strings.TrimSpace(requestLine), " ")
-	if len(parts) >= 2 {
-		return parts[1]
-	}
-	return ""
-}
-
-// 发送 404 响应
-func send404Response(conn net.Conn) {
-	response := "HTTP/1.1 404 Not Found\r\n" +
-		"Content-Type: text/plain\r\n" +
-		"Content-Length: 9\r\n" +
-		"Connection: close\r\n" +
-		"\r\n" +
-		"Not Found"
-	conn.Write([]byte(response))
-}
-
-// 转发 HTTP 请求
-func forwardHTTPRequest(clientConn net.Conn, reader *bufio.Reader, initialData []byte) {
+// forwardConnection 转发连接到后端
+func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []byte,
+	cfg ListenerConfig, global GlobalConfig, protocol string) {
+	
 	// 连接后端
-	backendConn, err := net.Dial("tcp", BACKEND_ADDR)
+	var backendConn net.Conn
+	var err error
+	
+	if cfg.Timeout.Enabled && cfg.Timeout.ConnectBackend > 0 {
+		backendConn, err = net.DialTimeout("tcp", cfg.BackendAddr,
+			time.Duration(cfg.Timeout.ConnectBackend)*time.Second)
+	} else {
+		backendConn, err = net.Dial("tcp", cfg.BackendAddr)
+	}
+	
 	if err != nil {
-		log.Printf("Failed to connect to backend: %v", err)
-		send502Response(clientConn)
+		log.Printf("[%s] Failed to connect to backend %s: %v",
+			cfg.Name, cfg.BackendAddr, err)
+		if protocol == "HTTP" {
+			sendErrorResponse(clientConn, "502")
+		}
 		return
 	}
 	defer backendConn.Close()
 
 	// 发送初始数据
 	if _, err := backendConn.Write(initialData); err != nil {
-		log.Printf("Error writing to backend: %v", err)
-		return
-	}
-
-	// 启动双向转发
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// 客户端 -> 后端（从 reader 读取剩余数据）
-	go func() {
-		defer wg.Done()
-		io.Copy(backendConn, reader)
-		backendConn.(*net.TCPConn).CloseWrite()
-	}()
-
-	// 后端 -> 客户端
-	go func() {
-		defer wg.Done()
-		io.Copy(clientConn, backendConn)
-		clientConn.(*net.TCPConn).CloseWrite()
-	}()
-
-	wg.Wait()
-}
-
-// 转发原始 TCP 连接
-func forwardRawTCP(clientConn net.Conn, reader *bufio.Reader, initialData []byte) {
-	// 连接后端
-	backendConn, err := net.Dial("tcp", BACKEND_ADDR)
-	if err != nil {
-		log.Printf("Failed to connect to backend: %v", err)
-		return
-	}
-	defer backendConn.Close()
-
-	// 发送初始数据
-	if _, err := backendConn.Write(initialData); err != nil {
-		log.Printf("Error writing to backend: %v", err)
+		if global.LogLevel == "debug" {
+			log.Printf("[%s] Error writing to backend: %v", cfg.Name, err)
+		}
 		return
 	}
 
@@ -193,50 +213,101 @@ func forwardRawTCP(clientConn net.Conn, reader *bufio.Reader, initialData []byte
 	// 客户端 -> 后端
 	go func() {
 		defer wg.Done()
-		buf := make([]byte, BUFFER_SIZE)
-		for {
-			// 先读取 reader 中缓冲的数据
-			if reader.Buffered() > 0 {
-				n, err := reader.Read(buf)
-				if n > 0 {
-					if _, err := backendConn. Write(buf[:n]); err != nil {
-						return
-					}
-				}
-				if err != nil {
-					return
-				}
-			} else {
-				// reader 缓冲已空，直接从 conn 读取
-				n, err := clientConn.Read(buf)
-				if n > 0 {
-					if _, err := backendConn.Write(buf[:n]); err != nil {
-						return
-					}
-				}
-				if err != nil {
+		buf := make([]byte, global.BufferSize)
+		
+		// 先读取 reader 缓冲中的剩余数据
+		for reader.Buffered() > 0 {
+			n, err := reader.Read(buf)
+			if n > 0 {
+				if _, err := backendConn.Write(buf[:n]); err != nil {
 					return
 				}
 			}
+			if err != nil {
+				return
+			}
+		}
+		
+		// 然后直接从连接读取
+		io.CopyBuffer(backendConn, clientConn, buf)
+		if tcpConn, ok := backendConn.(*net.TCPConn); ok {
+			tcpConn.CloseWrite()
 		}
 	}()
 
 	// 后端 -> 客户端
 	go func() {
 		defer wg.Done()
-		io. Copy(clientConn, backendConn)
+		buf := make([]byte, global.BufferSize)
+		io.CopyBuffer(clientConn, backendConn, buf)
+		if tcpConn, ok := clientConn.(*net.TCPConn); ok {
+			tcpConn.CloseWrite()
+		}
 	}()
 
 	wg.Wait()
 }
 
-// 发送 502 响应
-func send502Response(conn net.Conn) {
-	response := "HTTP/1.1 502 Bad Gateway\r\n" +
-		"Content-Type: text/plain\r\n" +
-		"Content-Length: 15\r\n" +
-		"Connection: close\r\n" +
-		"\r\n" +
-		"Bad Gateway"
+// isHTTPRequest 判断是否是 HTTP 请求
+func isHTTPRequest(data []byte) bool {
+	line := string(data)
+	methods := []string{"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "}
+	for _, method := range methods {
+		if strings.HasPrefix(line, method) {
+			return true
+		}
+	}
+	return false
+}
+
+// findFirstLine 查找第一行的结束位置
+func findFirstLine(data []byte) int {
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			return i
+		}
+	}
+	return -1
+}
+
+// extractHTTPPath 提取 HTTP 路径
+func extractHTTPPath(requestLine string) string {
+	parts := strings.Split(strings.TrimSpace(requestLine), " ")
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return ""
+}
+
+// sendErrorResponse 发送错误响应
+func sendErrorResponse(conn net.Conn, responseType string) {
+	var response string
+	
+	switch responseType {
+	case "404":
+		response = "HTTP/1.1 404 Not Found\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 9\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Not Found"
+	case "403":
+		response = "HTTP/1.1 403 Forbidden\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 9\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Forbidden"
+	case "502":
+		response = "HTTP/1.1 502 Bad Gateway\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 11\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Bad Gateway"
+	default:
+		return
+	}
+	
 	conn.Write([]byte(response))
 }

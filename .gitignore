@@ -36,3 +36,10 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+
+# Backup files
+*.backup
+
+# Config file (user may customize)
+# Uncomment if you want to ignore local config
+# config.toml
