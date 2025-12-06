@@ -163,37 +163,3 @@ func (l *ListenerConfig) MatchRoute(path string) *RouteRule {
 	}
 	return nil
 }
-
-// GetDefaultConfig 获取默认配置
-func GetDefaultConfig() *Config {
-	return &Config{
-		Global: GlobalConfig{
-			BufferSize: 32768,
-			LogLevel:   "info",
-		},
-		Listeners: []ListenerConfig{
-			{
-				Name:        "default_proxy",
-				ListenPort:  ":8880",
-				BackendAddr: "127.0.0.1:9991",
-				Protocol:    "auto",
-				Timeout: TimeoutConfig{
-					Enabled:        true,
-					InitialRead:    30,
-					ConnectBackend: 5,
-				},
-				Routes: []RouteRule{
-					{
-						Path:     "/slt",
-						Action:   "drop",
-						Response: "404",
-					},
-					{
-						Path:   "/",
-						Action: "allow",
-					},
-				},
-			},
-		},
-	}
-}

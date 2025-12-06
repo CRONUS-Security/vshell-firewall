@@ -66,12 +66,6 @@ run: build
 	@echo "Running $(BINARY_NAME)..."
 	./$(BUILD_DIR)/$(BINARY_NAME)
 
-# 测试
-.PHONY: test
-test:
-	@echo "Running tests..."
-	go test -v ./...
-
 # 代码格式化
 .PHONY: fmt
 fmt:
@@ -177,7 +171,7 @@ clean:
 .PHONY: distclean
 distclean: clean
 	@echo "Removing all generated files..."
-	@go clean -cache -modcache -testcache
+	@go clean -cache -modcache
 	@echo "Distclean complete"
 
 # 显示帮助
@@ -195,7 +189,6 @@ help:
 	@echo "  build-linux-arm64 - Cross compile for Linux arm64"
 	@echo "  build-all        - Build for all platforms"
 	@echo "  run              - Build and run the proxy"
-	@echo "  test             - Run tests"
 	@echo "  fmt              - Format source code"
 	@echo "  vet              - Run go vet"
 	@echo "  tidy             - Tidy module dependencies"
