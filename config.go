@@ -22,12 +22,14 @@ type GlobalConfig struct {
 
 // ListenerConfig 监听器配置
 type ListenerConfig struct {
-	Name        string        `toml:"name"`
-	ListenPort  string        `toml:"listen_port"`
-	BackendAddr string        `toml:"backend_addr"`
-	Protocol    string        `toml:"protocol"` // auto, http, tcp
-	Timeout     TimeoutConfig `toml:"timeout"`
-	Routes      []RouteRule   `toml:"routes"`
+	Name        string              `toml:"name"`
+	ListenPort  string              `toml:"listen_port"`
+	BackendAddr string              `toml:"backend_addr"`
+	Protocol    string              `toml:"protocol"` // tcp
+	Timeout     TimeoutConfig       `toml:"timeout"`
+	HTTP        HTTPProcessorConfig `toml:"http"`
+	TCP         TCPProcessorConfig  `toml:"tcp"`
+	Routes      []RouteRule         `toml:"routes"` // 兼容旧配置，优先使用 HTTP/TCP processor
 }
 
 // TimeoutConfig 超时配置
@@ -37,7 +39,28 @@ type TimeoutConfig struct {
 	ConnectBackend int  `toml:"connect_backend"`
 }
 
-// RouteRule 路由规则
+// HTTPProcessorConfig HTTP 处理器配置
+type HTTPProcessorConfig struct {
+	Processors []Processor `toml:"processor"`
+}
+
+// TCPProcessorConfig TCP 处理器配置
+type TCPProcessorConfig struct {
+	Processors []Processor `toml:"processor"`
+}
+
+// Processor 处理器规则
+type Processor struct {
+	Path       interface{} `toml:"path"`      // string 或 []string
+	MatchMode  string      `toml:"match_mode"` // prefix (前缀), exact (精确), regex (正则)
+	Action     string      `toml:"action"`     // allow, drop, rewrite, file, proxy
+	Response   string      `toml:"response"`   // 404, 403, 502, close (用于 drop)
+	RewriteTo  string      `toml:"rewrite_to"` // 路径重写目标 (用于 rewrite)
+	File       string      `toml:"file"`       // 文件路径 (用于 file)
+	ProxyTo    string      `toml:"proxy_to"`   // 代理目标 (用于 proxy)
+}
+
+// RouteRule 路由规则（兼容旧配置）
 type RouteRule struct {
 	Path      string `toml:"path"`
 	Action    string `toml:"action"`     // drop, allow
@@ -124,11 +147,21 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("listener[%d]: timeout.connect_backend cannot be negative", i)
 		}
 
-		// 检查路由规则
-		if len(listener.Routes) == 0 {
-			return fmt.Errorf("listener[%d]: at least one route must be configured", i)
+		// 验证 HTTP 处理器
+		for j, proc := range listener.HTTP.Processors {
+			if err := validateProcessor(proc, i, "http", j); err != nil {
+				return err
+			}
 		}
 
+		// 验证 TCP 处理器
+		for j, proc := range listener.TCP.Processors {
+			if err := validateProcessor(proc, i, "tcp", j); err != nil {
+				return err
+			}
+		}
+
+		// 检查旧的路由规则（兼容性）
 		for j, route := range listener.Routes {
 			if route.Path == "" {
 				return fmt.Errorf("listener[%d].route[%d]: path is required", i, j)
@@ -149,6 +182,123 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// validateProcessor 验证处理器配置
+func validateProcessor(proc Processor, listenerIdx int, processorType string, procIdx int) error {
+	validActions := map[string]bool{"allow": true, "drop": true, "rewrite": true, "file": true, "proxy": true}
+	if !validActions[proc.Action] {
+		return fmt.Errorf("listener[%d].%s.processor[%d]: action must be one of: allow, drop, rewrite, file, proxy", 
+			listenerIdx, processorType, procIdx)
+	}
+
+	// 验证匹配模式
+	if proc.MatchMode != "" {
+		validModes := map[string]bool{"prefix": true, "exact": true, "regex": true}
+		if !validModes[proc.MatchMode] {
+			return fmt.Errorf("listener[%d].%s.processor[%d]: match_mode must be one of: prefix, exact, regex", 
+				listenerIdx, processorType, procIdx)
+		}
+	}
+
+	// 验证 action 特定的配置
+	switch proc.Action {
+	case "drop":
+		validResponses := map[string]bool{"404": true, "403": true, "502": true, "close": true}
+		if proc.Response != "" && !validResponses[proc.Response] {
+			return fmt.Errorf("listener[%d].%s.processor[%d]: response must be one of: 404, 403, 502, close", 
+				listenerIdx, processorType, procIdx)
+		}
+	case "rewrite":
+		if proc.RewriteTo == "" {
+			return fmt.Errorf("listener[%d].%s.processor[%d]: rewrite_to is required for rewrite action", 
+				listenerIdx, processorType, procIdx)
+		}
+	case "file":
+		if proc.File == "" {
+			return fmt.Errorf("listener[%d].%s.processor[%d]: file is required for file action", 
+				listenerIdx, processorType, procIdx)
+		}
+	case "proxy":
+		if proc.ProxyTo == "" {
+			return fmt.Errorf("listener[%d].%s.processor[%d]: proxy_to is required for proxy action", 
+				listenerIdx, processorType, procIdx)
+		}
+	}
+
+	return nil
+}
+
+// GetPaths 获取处理器的路径列表
+func (p *Processor) GetPaths() []string {
+	if p.Path == nil {
+		return []string{}
+	}
+
+	switch v := p.Path.(type) {
+	case string:
+		return []string{v}
+	case []interface{}:
+		paths := make([]string, 0, len(v))
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				paths = append(paths, str)
+			}
+		}
+		return paths
+	default:
+		return []string{}
+	}
+}
+
+// MatchProcessor 匹配 HTTP 处理器
+func (l *ListenerConfig) MatchHTTPProcessor(path string) *Processor {
+	for _, proc := range l.HTTP.Processors {
+		if matchPath(path, proc) {
+			return &proc
+		}
+	}
+	return nil
+}
+
+// MatchTCPProcessor 获取 TCP 处理器
+func (l *ListenerConfig) MatchTCPProcessor() *Processor {
+	if len(l.TCP.Processors) > 0 {
+		return &l.TCP.Processors[0]
+	}
+	return nil
+}
+
+// matchPath 匹配路径
+func matchPath(path string, proc Processor) bool {
+	paths := proc.GetPaths()
+	if len(paths) == 0 {
+		return true // 无路径限制，匹配所有
+	}
+
+	matchMode := proc.MatchMode
+	if matchMode == "" {
+		matchMode = "prefix" // 默认前缀匹配
+	}
+
+	for _, pattern := range paths {
+		switch matchMode {
+		case "exact":
+			if path == pattern {
+				return true
+			}
+		case "prefix":
+			if strings.HasPrefix(path, pattern) {
+				return true
+			}
+		case "regex":
+			// TODO: 实现正则匹配
+			if strings.HasPrefix(path, pattern) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // MatchRoute 匹配路由规则

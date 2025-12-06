@@ -120,54 +120,73 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 			path = extractHTTPPath(requestLine)
 		}
 
-		// 匹配路由规则
-		route := cfg.MatchRoute(path)
-		if route == nil {
-			// 没有匹配的规则，默认拒绝
-			log.Printf("[%s] No route matched for path '%s' from %s, dropping",
+		// 匹配 HTTP 处理器
+		processor := cfg.MatchHTTPProcessor(path)
+		if processor == nil {
+			// 没有匹配的处理器，默认拒绝
+			log.Printf("[%s] No HTTP processor matched for path '%s' from %s, dropping",
 				cfg.Name, path, clientConn.RemoteAddr())
 			sendErrorResponse(clientConn, "404")
 			return
 		}
 
-		// 执行动作
-		if route.Action == "drop" {
+		// 执行处理器动作
+		if global.LogLevel == "debug" || global.LogLevel == "info" {
+			log.Printf("[%s] HTTP request: %s from %s, action: %s",
+				cfg.Name, strings.TrimSpace(requestLine), clientConn.RemoteAddr(), processor.Action)
+		}
+
+		switch processor.Action {
+		case "drop":
+			response := processor.Response
+			if response == "" {
+				response = "404"
+			}
 			log.Printf("[%s] Blocked request to '%s' from %s (response: %s)",
-				cfg.Name, path, clientConn.RemoteAddr(), route.Response)
-			
-			if route.Response != "close" {
-				sendErrorResponse(clientConn, route.Response)
+				cfg.Name, path, clientConn.RemoteAddr(), response)
+			if response != "close" {
+				sendErrorResponse(clientConn, response)
 			}
 			return
-		}
 
-		// 允许通过
-		if global.LogLevel == "debug" || global.LogLevel == "info" {
-			log.Printf("[%s] Forwarding HTTP request: %s from %s",
-				cfg.Name, strings.TrimSpace(requestLine), clientConn.RemoteAddr())
+		case "file":
+			// 返回文件内容
+			serveFile(clientConn, processor.File, cfg.Name)
+			return
+
+		case "allow", "rewrite":
+			// 允许通过或重写后转发
+			forwardConnection(clientConn, reader, initialData, cfg, global, "HTTP", processor)
 		}
-		forwardConnection(clientConn, reader, initialData, cfg, global, "HTTP", route)
 	} else {
-		// 原始 TCP 处理
-		// 对于 TCP，路由匹配使用 "/"
-		route := cfg.MatchRoute("/")
-		if route == nil || route.Action == "drop" {
-			log.Printf("[%s] TCP connection from %s blocked by route rule",
+		// TCP 协议处理
+		processor := cfg.MatchTCPProcessor()
+		if processor == nil {
+			log.Printf("[%s] No TCP processor configured, dropping connection from %s",
 				cfg.Name, clientConn.RemoteAddr())
 			return
 		}
 
 		if global.LogLevel == "debug" || global.LogLevel == "info" {
-			log.Printf("[%s] Forwarding raw TCP connection from %s",
-				cfg.Name, clientConn.RemoteAddr())
+			log.Printf("[%s] TCP connection from %s, action: %s",
+				cfg.Name, clientConn.RemoteAddr(), processor.Action)
 		}
-		forwardConnection(clientConn, reader, initialData, cfg, global, "TCP", route)
+
+		switch processor.Action {
+		case "drop":
+			log.Printf("[%s] TCP connection from %s blocked by processor",
+				cfg.Name, clientConn.RemoteAddr())
+			return
+
+		case "allow":
+			forwardConnection(clientConn, reader, initialData, cfg, global, "TCP", processor)
+		}
 	}
 }
 
 // forwardConnection 转发连接到后端
 func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []byte,
-	cfg ListenerConfig, global GlobalConfig, protocol string, route *RouteRule) {
+	cfg ListenerConfig, global GlobalConfig, protocol string, processor *Processor) {
 	
 	// 连接后端
 	var backendConn net.Conn
@@ -192,10 +211,13 @@ func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []
 
 	// 对于 HTTP 协议，如果配置了路径重写，则重写请求
 	dataToSend := initialData
-	if protocol == "HTTP" && route != nil && route.RewriteTo != "" {
-		dataToSend = rewriteHTTPPath(initialData, route.Path, route.RewriteTo)
-		if global.LogLevel == "debug" {
-			log.Printf("[%s] Rewriting path from %s to %s", cfg.Name, route.Path, route.RewriteTo)
+	if protocol == "HTTP" && processor != nil && processor.Action == "rewrite" && processor.RewriteTo != "" {
+		paths := processor.GetPaths()
+		if len(paths) > 0 {
+			dataToSend = rewriteHTTPPath(initialData, paths[0], processor.RewriteTo)
+			if global.LogLevel == "debug" {
+				log.Printf("[%s] Rewriting path from %s to %s", cfg.Name, paths[0], processor.RewriteTo)
+			}
 		}
 	}
 
@@ -353,4 +375,37 @@ func sendErrorResponse(conn net.Conn, responseType string) {
 	}
 	
 	conn.Write([]byte(response))
+}
+
+// serveFile 返回文件内容作为 HTTP 响应
+func serveFile(conn net.Conn, filePath string, listenerName string) {
+	// 读取文件内容
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Printf("[%s] Error reading file %s: %v", listenerName, filePath, err)
+		sendErrorResponse(conn, "404")
+		return
+	}
+
+	// 检测 Content-Type
+	contentType := "text/html; charset=utf-8"
+	if strings.HasSuffix(filePath, ".json") {
+		contentType = "application/json"
+	} else if strings.HasSuffix(filePath, ".txt") {
+		contentType = "text/plain; charset=utf-8"
+	} else if strings.HasSuffix(filePath, ".css") {
+		contentType = "text/css"
+	} else if strings.HasSuffix(filePath, ".js") {
+		contentType = "application/javascript"
+	}
+
+	// 构造 HTTP 响应
+	response := fmt.Sprintf("HTTP/1.1 200 OK\r\n"+
+		"Content-Type: %s\r\n"+
+		"Content-Length: %d\r\n"+
+		"Connection: close\r\n"+
+		"\r\n", contentType, len(data))
+
+	conn.Write([]byte(response))
+	conn.Write(data)
 }

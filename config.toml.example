@@ -1,5 +1,5 @@
 # vshell-firewall 配置文件示例
-# 复制此文件为 config.toml 并根据需要修改
+# 支持 HTTP 和 TCP 处理器管道
 
 # 全局配置
 [global]
@@ -16,29 +16,59 @@ protocol = "tcp"                 # 后端协议类型: tcp (目前仅支持 TCP)
 
 # 超时配置
 [listeners.timeout]
-enabled = true                # 是否启用超时
-initial_read = 30             # 初始读取超时 (秒)，0 表示无限制
-connect_backend = 5           # 连接后端超时 (秒)，0 表示无限制
+enabled = true                   # 是否启用超时
+initial_read = 30                # 初始读取超时 (秒)，0 表示无限制
+connect_backend = 5              # 连接后端超时 (秒)，0 表示无限制
 
-# 路由规则 - 按顺序匹配
-[[listeners.routes]]
-path = "/slt"                 # 路径匹配
-action = "drop"               # 拒绝访问
-response = "404"              # drop 时的响应: 404, 403, 502, close (直接关闭)
+# HTTP 处理器管道 - 按顺序匹配处理
+# 路径重写示例
+[[listeners.http.processor]]
+path = "/patch_slt"
+match_mode = "prefix"            # 匹配模式: prefix (前缀), exact (精确), regex (正则)
+action = "rewrite"               # 动作: allow, drop, rewrite, file, proxy
+rewrite_to = "/slt"
 
-[[listeners.routes]]
+[[listeners.http.processor]]
+path = "/patch_swt"
+match_mode = "prefix"
+action = "rewrite"
+rewrite_to = "/swt"
+
+# 路径过滤示例
+[[listeners.http.processor]]
+path = "/slt"
+match_mode = "prefix"
+action = "drop"
+response = "404"                 # 响应类型: 404, 403, 502, close
+
+[[listeners.http.processor]]
 path = "/swt"
+match_mode = "prefix"
 action = "drop"
 response = "404"
 
-[[listeners.routes]]
-path = "/patch_slt"
-action = "allow"
-rewrite_to = "/slt"
+# 允许特定路径
+[[listeners.http.processor]]
+path = "/admin"
+match_mode = "prefix"
+action = "allow"                 # 转发到后端
 
-[[listeners.routes]]
-path = "/"                    # 默认规则，匹配所有
-action = "allow"
+# 文件响应示例
+[[listeners.http.processor]]
+path = ["/", "/index"]           # 支持多个路径
+action = "file"                  # 返回文件内容
+file = "./index.html"
+
+# TCP 处理器 - 处理非 HTTP 的 TCP 连接
+[[listeners.tcp.processor]]
+action = "drop"                  # 拒绝所有非 HTTP 的 TCP 连接
+response = "close"
+
+
+# TCP 处理器 - 处理非 HTTP 的 TCP 连接
+[[listeners.tcp.processor]]
+action = "drop"                  # 拒绝所有非 HTTP 的 TCP 连接
+response = "close"
 
 
 # 第二个监听器示例 - 纯 TCP 转发，无超时限制
@@ -46,11 +76,11 @@ action = "allow"
 name = "tcp_longconn"
 listen_port = ":9880"
 backend_addr = "127.0.0.1:9992"
-protocol = "tcp"              # TCP 协议
+protocol = "tcp"                 # TCP 协议
 
 [listeners.timeout]
-enabled = false               # 禁用超时，适合长连接
+enabled = false                  # 禁用超时，适合长连接
 
-[[listeners.routes]]
-path = "/"
-action = "allow"
+# TCP 处理器 - 允许所有 TCP 连接
+[[listeners.tcp.processor]]
+action = "allow"                 # 转发到后端
