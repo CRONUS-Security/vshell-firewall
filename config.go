@@ -19,6 +19,7 @@ type Config struct {
 type GlobalConfig struct {
 	BufferSize   int              `toml:"buffer_size"`
 	LogLevel     string           `toml:"log_level"`
+	LogFile      string           `toml:"log_file"` // 日志文件路径，为空则只输出到控制台
 	GeoIP        GeoIPConfig      `toml:"geoip"`
 	TimeWindow   TimeWindowConfig `toml:"time_window"`
 }
@@ -120,6 +121,8 @@ func (c *Config) Validate() error {
 	if !validLogLevels[c.Global.LogLevel] {
 		return fmt.Errorf("global.log_level must be one of: debug, info, warn, error")
 	}
+
+	// LogFile 可以为空（只输出到控制台），不需要特别验证
 
 	// 验证 GeoIP 配置
 	if c.Global.GeoIP.Enabled {

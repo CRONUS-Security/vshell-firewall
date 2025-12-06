@@ -43,6 +43,15 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	// 初始化日志系统
+	logFile, err := setupLogging(config.Global.LogFile)
+	if err != nil {
+		log.Fatalf("Failed to setup logging: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
+
 	log.Printf("Loaded config with %d listener(s)", len(config.Listeners))
 
 	// 初始化 GeoIP 管理器
@@ -64,6 +73,31 @@ func main() {
 
 	log.Println("All listeners started")
 	wg.Wait()
+}
+
+// setupLogging 设置日志输出到文件和控制台
+func setupLogging(logFilePath string) (*os.File, error) {
+	if logFilePath == "" {
+		// 如果没有配置日志文件，只输出到控制台
+		log.SetOutput(os.Stdout)
+		return nil, nil
+	}
+
+	// 打开日志文件（追加模式）
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %w", err)
+	}
+
+	// 创建多重写入器：同时写入文件和控制台
+	multiWriter := io.MultiWriter(os.Stdout, logFile)
+	log.SetOutput(multiWriter)
+	
+	// 设置日志格式：包含日期和时间
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
+	log.Printf("Logging to file: %s", logFilePath)
+	return logFile, nil
 }
 
 // startListener 启动单个监听器

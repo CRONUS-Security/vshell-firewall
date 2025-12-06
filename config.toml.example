@@ -5,6 +5,7 @@
 [global]
 buffer_size = 32768  # 缓冲区大小 (字节)
 log_level = "info"   # 日志级别: debug, info, warn, error
+log_file = "./vshell-firewall.log"  # 日志文件路径，为空则只输出到控制台
 
 # GeoIP 配置
 [global.geoip]
