@@ -1,5 +1,5 @@
 [Unit]
-Description=SLT Proxy - TCP Proxy with HTTP Filtering
+Description=Vshell Firewall - TCP Proxy with HTTP Filtering
 Documentation=https://github.com/yourusername/vshell-firewall
 After=network-online.target
 Wants=network-online.target
@@ -10,7 +10,7 @@ User=root
 Group=root
 
 # 二进制文件路径
-ExecStart=/usr/local/bin/slt-proxy
+ExecStart=/usr/local/bin/vshell-firewall
 
 # 自动重启配置
 Restart=always

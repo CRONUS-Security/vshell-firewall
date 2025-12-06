@@ -81,13 +81,13 @@ action = "allow"
 
 ```bash
 # 直接运行
-./build/slt-proxy
+./build/vshell-firewall
 
 # 指定配置文件
-./build/slt-proxy -config /path/to/config.toml
+./build/vshell-firewall -config /path/to/config.toml
 
 # 查看版本
-./build/slt-proxy -version
+./build/vshell-firewall -version
 ```
 
 ### 4. 安装为系统服务
@@ -305,25 +305,25 @@ make clean         # 清理构建产物
 
 ```bash
 # 启动
-sudo systemctl start slt-proxy
+sudo systemctl start vshell-firewall
 
 # 停止
-sudo systemctl stop slt-proxy
+sudo systemctl stop vshell-firewall
 
 # 重启
-sudo systemctl restart slt-proxy
+sudo systemctl restart vshell-firewall
 
 # 状态
-sudo systemctl status slt-proxy
+sudo systemctl status vshell-firewall
 
 # 查看日志
-sudo journalctl -u slt-proxy -f
+sudo journalctl -u vshell-firewall -f
 
 # 开机自启
-sudo systemctl enable slt-proxy
+sudo systemctl enable vshell-firewall
 
 # 禁用自启
-sudo systemctl disable slt-proxy
+sudo systemctl disable vshell-firewall
 ```
 
 ## 日志示例
@@ -377,7 +377,7 @@ make run
 - `config.toml` - 默认配置文件
 - `config.toml.example` - 完整配置示例
 - `Makefile` - 构建和部署脚本
-- `slt-proxy.service` - systemd 服务配置
+- `vshell-firewall.service` - systemd 服务配置
 
 ## License
 

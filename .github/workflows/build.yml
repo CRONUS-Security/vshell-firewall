@@ -18,10 +18,10 @@ jobs:
         include:
           - os: linux
             arch: amd64
-            output: slt-proxy-linux-amd64
+            output: vshell-firewall-linux-amd64
           - os: windows
             arch: amd64
-            output: slt-proxy-windows-amd64.exe
+            output: vshell-firewall-windows-amd64.exe
     
     steps:
       - name: Checkout code
@@ -71,7 +71,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            artifacts/slt-proxy-linux-amd64/slt-proxy-linux-amd64
-            artifacts/slt-proxy-windows-amd64.exe/slt-proxy-windows-amd64.exe
+            artifacts/vshell-firewall-linux-amd64/vshell-firewall-linux-amd64
+            artifacts/vshell-firewall-windows-amd64.exe/vshell-firewall-windows-amd64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

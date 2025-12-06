@@ -39,9 +39,10 @@ type TimeoutConfig struct {
 
 // RouteRule 路由规则
 type RouteRule struct {
-	Path     string `toml:"path"`
-	Action   string `toml:"action"`   // drop, allow
-	Response string `toml:"response"` // 404, 403, 502, close
+	Path      string `toml:"path"`
+	Action    string `toml:"action"`     // drop, allow
+	Response  string `toml:"response"`   // 404, 403, 502, close
+	RewriteTo string `toml:"rewrite_to"` // 路径重写目标（可选）
 }
 
 // LoadConfig 从文件加载配置

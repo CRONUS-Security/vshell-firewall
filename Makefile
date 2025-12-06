@@ -1,11 +1,11 @@
 # Makefile for vshell-firewall
 
 # 变量定义
-BINARY_NAME=slt-proxy
+BINARY_NAME=vshell-firewall
 BUILD_DIR=build
 SOURCE_FILES=$(wildcard *.go)
 INSTALL_PATH=/usr/local/bin
-SERVICE_FILE=slt-proxy.service
+SERVICE_FILE=vshell-firewall.service
 SERVICE_PATH=/etc/systemd/system
 
 # Go 编译参数

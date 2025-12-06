@@ -5,7 +5,7 @@ build/
 *.dll
 *.so
 *.dylib
-slt-proxy
+vshell-firewall
 
 # Test binary
 *.test

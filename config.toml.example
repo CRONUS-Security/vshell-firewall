@@ -21,8 +21,13 @@ connect_backend = 5           # 连接后端超时 (秒)，0 表示无限制
 
 # 路由规则 - 按顺序匹配
 [[listeners.routes]]
-path = "/slt"                 # 路径匹配 (支持前缀匹配)
-action = "drop"               # 动作: drop (拒绝), allow (允许)
+path = "/patch_slt"           # 路径匹配 (支持前缀匹配)
+action = "allow"              # 动作: drop (拒绝), allow (允许)
+rewrite_to = "/slt"           # 路径重写目标 (可选，将 /patch_slt 重写为 /slt)
+
+[[listeners.routes]]
+path = "/slt"                 # 路径匹配
+action = "drop"               # 拒绝访问
 response = "404"              # drop 时的响应: 404, 403, 502, close (直接关闭)
 
 [[listeners.routes]]

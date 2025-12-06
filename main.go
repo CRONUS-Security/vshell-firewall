@@ -28,7 +28,7 @@ func main() {
 
 	// 显示版本信息
 	if *version {
-		fmt.Printf("slt-proxy version %s\n", Version)
+		fmt.Printf("vshell-firewall version %s\n", Version)
 		fmt.Printf("Build time: %s\n", BuildTime)
 		fmt.Printf("Git commit: %s\n", GitCommit)
 		os.Exit(0)
@@ -154,7 +154,7 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 			log.Printf("[%s] Forwarding HTTP request: %s from %s",
 				cfg.Name, strings.TrimSpace(requestLine), clientConn.RemoteAddr())
 		}
-		forwardConnection(clientConn, reader, initialData, cfg, global, "HTTP")
+		forwardConnection(clientConn, reader, initialData, cfg, global, "HTTP", route)
 	} else {
 		// 原始 TCP 处理
 		// 对于 TCP，路由匹配使用 "/"
@@ -169,13 +169,13 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 			log.Printf("[%s] Forwarding raw TCP connection from %s",
 				cfg.Name, clientConn.RemoteAddr())
 		}
-		forwardConnection(clientConn, reader, initialData, cfg, global, "TCP")
+		forwardConnection(clientConn, reader, initialData, cfg, global, "TCP", route)
 	}
 }
 
 // forwardConnection 转发连接到后端
 func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []byte,
-	cfg ListenerConfig, global GlobalConfig, protocol string) {
+	cfg ListenerConfig, global GlobalConfig, protocol string, route *RouteRule) {
 	
 	// 连接后端
 	var backendConn net.Conn
@@ -198,8 +198,17 @@ func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []
 	}
 	defer backendConn.Close()
 
+	// 对于 HTTP 协议，如果配置了路径重写，则重写请求
+	dataToSend := initialData
+	if protocol == "HTTP" && route != nil && route.RewriteTo != "" {
+		dataToSend = rewriteHTTPPath(initialData, route.Path, route.RewriteTo)
+		if global.LogLevel == "debug" {
+			log.Printf("[%s] Rewriting path from %s to %s", cfg.Name, route.Path, route.RewriteTo)
+		}
+	}
+
 	// 发送初始数据
-	if _, err := backendConn.Write(initialData); err != nil {
+	if _, err := backendConn.Write(dataToSend); err != nil {
 		if global.LogLevel == "debug" {
 			log.Printf("[%s] Error writing to backend: %v", cfg.Name, err)
 		}
@@ -277,6 +286,48 @@ func extractHTTPPath(requestLine string) string {
 		return parts[1]
 	}
 	return ""
+}
+
+// rewriteHTTPPath 重写 HTTP 请求路径
+func rewriteHTTPPath(data []byte, fromPath, toPath string) []byte {
+	// 查找请求行的结束位置
+	firstLineEnd := -1
+	for i := 0; i < len(data)-1; i++ {
+		if data[i] == '\r' && data[i+1] == '\n' {
+			firstLineEnd = i
+			break
+		}
+	}
+	
+	if firstLineEnd < 0 {
+		return data
+	}
+	
+	requestLine := string(data[:firstLineEnd])
+	parts := strings.Split(requestLine, " ")
+	
+	// 检查是否需要重写路径
+	if len(parts) >= 3 {
+		path := parts[1]
+		
+		// 如果路径匹配 fromPath，则重写为 toPath
+		if strings.HasPrefix(path, fromPath) {
+			newPath := toPath + strings.TrimPrefix(path, fromPath)
+			parts[1] = newPath
+			
+			// 重新构造请求行
+			newRequestLine := strings.Join(parts, " ")
+			
+			// 构造新的请求数据
+			result := make([]byte, 0, len(data))
+			result = append(result, []byte(newRequestLine)...)
+			result = append(result, data[firstLineEnd:]...)
+			
+			return result
+		}
+	}
+	
+	return data
 }
 
 // sendErrorResponse 发送错误响应
