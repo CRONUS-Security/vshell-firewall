@@ -43,3 +43,4 @@ temp/
 # Config file (user may customize)
 # Uncomment if you want to ignore local config
 # config.toml
+GeoLite2-Country.mmdb

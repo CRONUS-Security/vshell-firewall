@@ -6,6 +6,14 @@
 buffer_size = 32768  # 缓冲区大小 (字节)
 log_level = "info"   # 日志级别: debug, info, warn, error
 
+# GeoIP 配置
+[global.geoip]
+enabled = true                               # 是否启用 GeoIP 检查
+database_path = "./GeoLite2-Country.mmdb"    # GeoIP 数据库路径
+# 支持国家代码（如 US, CN, GB）和大洲代码（如 EU, AS, NA, SA, AF, OC）
+# EU 会自动匹配所有欧洲国家
+block_regions = ["US", "EU"]                 # 拦截的地区列表
+
 # 监听端口配置 - 可以配置多个
 [[listeners]]
 name = "http_proxy"              # 监听器名称

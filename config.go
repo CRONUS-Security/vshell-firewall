@@ -16,8 +16,16 @@ type Config struct {
 
 // GlobalConfig 全局配置
 type GlobalConfig struct {
-	BufferSize int    `toml:"buffer_size"`
-	LogLevel   string `toml:"log_level"`
+	BufferSize int         `toml:"buffer_size"`
+	LogLevel   string      `toml:"log_level"`
+	GeoIP      GeoIPConfig `toml:"geoip"`
+}
+
+// GeoIPConfig GeoIP 配置
+type GeoIPConfig struct {
+	Enabled      bool     `toml:"enabled"`       // 是否启用 GeoIP 检查
+	DatabasePath string   `toml:"database_path"` // GeoLite2 数据库路径
+	BlockRegions []string `toml:"block_regions"` // 要拦截的地区列表，如 ["US", "GB", "EU"]
 }
 
 // ListenerConfig 监听器配置
@@ -101,6 +109,16 @@ func (c *Config) Validate() error {
 	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 	if !validLogLevels[c.Global.LogLevel] {
 		return fmt.Errorf("global.log_level must be one of: debug, info, warn, error")
+	}
+
+	// 验证 GeoIP 配置
+	if c.Global.GeoIP.Enabled {
+		if c.Global.GeoIP.DatabasePath == "" {
+			return fmt.Errorf("global.geoip.database_path is required when geoip is enabled")
+		}
+		if len(c.Global.GeoIP.BlockRegions) == 0 {
+			return fmt.Errorf("global.geoip.block_regions must contain at least one region when geoip is enabled")
+		}
 	}
 
 	// 验证监听器配置

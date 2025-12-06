@@ -21,6 +21,9 @@ var (
 	Version   = "dev"
 	BuildTime = "unknown"
 	GitCommit = "unknown"
+	
+	// 全局 GeoIP 管理器
+	geoipManager *GeoIPManager
 )
 
 func main() {
@@ -41,6 +44,13 @@ func main() {
 	}
 
 	log.Printf("Loaded config with %d listener(s)", len(config.Listeners))
+
+	// 初始化 GeoIP 管理器
+	geoipManager, err = NewGeoIPManager(config.Global.GeoIP)
+	if err != nil {
+		log.Fatalf("Failed to initialize GeoIP manager: %v", err)
+	}
+	defer geoipManager.Close()
 
 	// 启动所有监听器
 	var wg sync.WaitGroup
@@ -81,6 +91,22 @@ func startListener(cfg ListenerConfig, global GlobalConfig) {
 // handleConnection 处理单个连接
 func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConfig) {
 	defer clientConn.Close()
+
+	// GeoIP 检查
+	if geoipManager != nil && geoipManager.enabled {
+		clientIP := getIPFromAddr(clientConn.RemoteAddr().String())
+		blocked, countryCode, err := geoipManager.IsBlocked(clientIP)
+		if err != nil {
+			log.Printf("[%s] GeoIP lookup error for %s: %v", cfg.Name, clientIP, err)
+		} else if blocked {
+			if global.LogLevel == "debug" || global.LogLevel == "info" {
+				log.Printf("[%s] Blocked connection from %s (Country: %s)", cfg.Name, clientIP, countryCode)
+			}
+			return
+		} else if global.LogLevel == "debug" {
+			log.Printf("[%s] Allowed connection from %s (Country: %s)", cfg.Name, clientIP, countryCode)
+		}
+	}
 
 	// 设置初始读取超时
 	if cfg.Timeout.Enabled && cfg.Timeout.InitialRead > 0 {
@@ -408,4 +434,14 @@ func serveFile(conn net.Conn, filePath string, listenerName string) {
 
 	conn.Write([]byte(response))
 	conn.Write(data)
+}
+
+// getIPFromAddr 从地址字符串中提取 IP
+func getIPFromAddr(addr string) string {
+	// 格式: "IP:Port"
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
 }

@@ -7,6 +7,7 @@
 - 🚀 **高性能** - 高效的 TCP 代理转发
 - 🔌 **多端口监听** - 支持同时监听多个端口，各自独立配置
 - 🔒 **灵活的路由规则** - 基于路径的访问控制（允许/拒绝）
+- 🌍 **GeoIP 支持** - 基于 IP 地理位置的访问控制，可拦截特定国家或地区
 - 🔄 **TCP 协议支持** - 支持 raw TCP 后端服务（包括 HTTP 和长连接）
 - ⚡ **长连接支持** - 可配置的超时策略，支持长期 TCP 连接
 - 🛡️ **恶意连接防护** - 可选的初始超时防止空连接占用资源
@@ -65,6 +66,12 @@ vim config.toml
 buffer_size = 32768
 log_level = "info"
 
+# GeoIP 配置（可选）
+[global.geoip]
+enabled = true
+database_path = "./GeoLite2-Country.mmdb"
+block_regions = ["US", "EU"]  # 拦截美国和欧洲地区
+
 [[listeners]]
 name = "my_proxy"
 listen_port = ":8880"
@@ -121,6 +128,18 @@ sudo make enable
 buffer_size = 32768  # 缓冲区大小（字节）
 log_level = "info"   # 日志级别：debug, info, warn, error
 ```
+
+#### GeoIP 配置（可选）
+
+```toml
+[global.geoip]
+enabled = true                               # 是否启用 GeoIP 检查
+database_path = "./GeoLite2-Country.mmdb"    # GeoIP 数据库路径
+block_regions = ["US", "EU", "JP"]           # 要拦截的地区列表
+```
+
+支持国家代码（如 `US`, `CN`, `GB`）和大洲代码（如 `EU`, `AS`, `NA`）。
+详细说明请参阅 [GEOIP.md](GEOIP.md)。
 
 ### 监听器配置
 
@@ -237,7 +256,35 @@ path = "/"
 action = "allow"
 ```
 
-### 场景 3: 多端口，混合模式
+### 场景 3: GeoIP 地区拦截
+
+```toml
+[global]
+buffer_size = 32768
+log_level = "info"
+
+# 启用 GeoIP，拦截美国和欧洲地区
+[global.geoip]
+enabled = true
+database_path = "./GeoLite2-Country.mmdb"
+block_regions = ["US", "EU"]
+
+[[listeners]]
+name = "protected_service"
+listen_port = ":8880"
+backend_addr = "127.0.0.1:8000"
+protocol = "tcp"
+
+[listeners.timeout]
+enabled = true
+initial_read = 30
+
+[[listeners.routes]]
+path = "/"
+action = "allow"
+```
+
+### 场景 4: 多端口，混合模式
 
 ```toml
 # HTTP 代理（端口 8880）
