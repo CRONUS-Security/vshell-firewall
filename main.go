@@ -92,6 +92,23 @@ func startListener(cfg ListenerConfig, global GlobalConfig) {
 func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConfig) {
 	defer clientConn.Close()
 
+	// 时间窗口检查（仅对新连接）
+	if global.TimeWindow.Enabled {
+		inWindow, err := global.TimeWindow.IsInTimeWindow()
+		if err != nil {
+			log.Printf("[%s] Time window check error: %v", cfg.Name, err)
+			// 出错时默认拒绝
+			return
+		}
+		if !inWindow {
+			if global.LogLevel == "debug" || global.LogLevel == "info" {
+				log.Printf("[%s] Connection from %s blocked by time window (outside allowed hours)",
+					cfg.Name, clientConn.RemoteAddr())
+			}
+			return
+		}
+	}
+
 	// GeoIP 检查
 	if geoipManager != nil && geoipManager.enabled {
 		clientIP := getIPFromAddr(clientConn.RemoteAddr().String())

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -16,9 +17,10 @@ type Config struct {
 
 // GlobalConfig 全局配置
 type GlobalConfig struct {
-	BufferSize int         `toml:"buffer_size"`
-	LogLevel   string      `toml:"log_level"`
-	GeoIP      GeoIPConfig `toml:"geoip"`
+	BufferSize   int              `toml:"buffer_size"`
+	LogLevel     string           `toml:"log_level"`
+	GeoIP        GeoIPConfig      `toml:"geoip"`
+	TimeWindow   TimeWindowConfig `toml:"time_window"`
 }
 
 // GeoIPConfig GeoIP 配置
@@ -26,6 +28,14 @@ type GeoIPConfig struct {
 	Enabled      bool     `toml:"enabled"`       // 是否启用 GeoIP 检查
 	DatabasePath string   `toml:"database_path"` // GeoLite2 数据库路径
 	BlockRegions []string `toml:"block_regions"` // 要拦截的地区列表，如 ["US", "GB", "EU"]
+}
+
+// TimeWindowConfig 时间窗口配置
+type TimeWindowConfig struct {
+	Enabled   bool   `toml:"enabled"`    // 是否启用时间窗口过滤
+	Timezone  string `toml:"timezone"`   // 时区，如 "UTC", "Asia/Shanghai"
+	StartTime string `toml:"start_time"` // 开始时间，格式 HH:MM，如 "00:00"
+	EndTime   string `toml:"end_time"`   // 结束时间，格式 HH:MM，如 "11:00"
 }
 
 // ListenerConfig 监听器配置
@@ -118,6 +128,13 @@ func (c *Config) Validate() error {
 		}
 		if len(c.Global.GeoIP.BlockRegions) == 0 {
 			return fmt.Errorf("global.geoip.block_regions must contain at least one region when geoip is enabled")
+		}
+	}
+
+	// 验证时间窗口配置
+	if c.Global.TimeWindow.Enabled {
+		if err := validateTimeWindowConfig(&c.Global.TimeWindow); err != nil {
+			return fmt.Errorf("global.time_window: %w", err)
 		}
 	}
 
@@ -328,4 +345,68 @@ func (l *ListenerConfig) MatchRoute(path string) *RouteRule {
 		}
 	}
 	return nil
+}
+
+// validateTimeWindowConfig 验证时间窗口配置
+func validateTimeWindowConfig(tw *TimeWindowConfig) error {
+	if tw.Timezone == "" {
+		return fmt.Errorf("timezone is required")
+	}
+	
+	// 验证时区
+	if _, err := time.LoadLocation(tw.Timezone); err != nil {
+		return fmt.Errorf("invalid timezone '%s': %w", tw.Timezone, err)
+	}
+	
+	if tw.StartTime == "" {
+		return fmt.Errorf("start_time is required")
+	}
+	if tw.EndTime == "" {
+		return fmt.Errorf("end_time is required")
+	}
+	
+	// 验证时间格式
+	if _, err := time.Parse("15:04", tw.StartTime); err != nil {
+		return fmt.Errorf("invalid start_time format '%s', expected HH:MM", tw.StartTime)
+	}
+	if _, err := time.Parse("15:04", tw.EndTime); err != nil {
+		return fmt.Errorf("invalid end_time format '%s', expected HH:MM", tw.EndTime)
+	}
+	
+	return nil
+}
+
+// IsInTimeWindow 检查当前时间是否在允许的时间窗口内
+func (tw *TimeWindowConfig) IsInTimeWindow() (bool, error) {
+	if !tw.Enabled {
+		return true, nil
+	}
+	
+	// 加载时区
+	loc, err := time.LoadLocation(tw.Timezone)
+	if err != nil {
+		return false, fmt.Errorf("failed to load timezone: %w", err)
+	}
+	
+	// 获取当前时间（在指定时区）
+	now := time.Now().In(loc)
+	currentHour := now.Hour()
+	currentMinute := now.Minute()
+	currentTimeInMinutes := currentHour*60 + currentMinute
+	
+	// 解析开始和结束时间
+	startTime, _ := time.Parse("15:04", tw.StartTime)
+	endTime, _ := time.Parse("15:04", tw.EndTime)
+	
+	startMinutes := startTime.Hour()*60 + startTime.Minute()
+	endMinutes := endTime.Hour()*60 + endTime.Minute()
+	
+	// 检查是否在时间窗口内
+	if startMinutes <= endMinutes {
+		// 正常情况：start_time < end_time (如 00:00 - 11:00)
+		return currentTimeInMinutes >= startMinutes && currentTimeInMinutes < endMinutes, nil
+	} else {
+		// 跨天情况：start_time > end_time (如 23:00 - 02:00)
+		return currentTimeInMinutes >= startMinutes || currentTimeInMinutes < endMinutes, nil
+	}
 }
