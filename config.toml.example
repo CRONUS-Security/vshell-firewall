@@ -8,10 +8,11 @@ log_level = "info"   # 日志级别: debug, info, warn, error
 
 # 监听端口配置 - 可以配置多个
 [[listeners]]
-name = "http_proxy"           # 监听器名称
-listen_port = ":8880"         # 监听端口
+name = "http_proxy"              # 监听器名称
+listen_port = ":8880"            # 监听端口
 backend_addr = "127.0.0.1:9991"  # 后端地址
-protocol = "auto"             # 协议类型: auto (自动检测), http, tcp
+protocol = "tcp"                 # 后端协议类型: tcp (目前仅支持 TCP)
+                                 # TODO: 未来支持 kcp/udp, websocket
 
 # 超时配置
 [listeners.timeout]
@@ -21,19 +22,19 @@ connect_backend = 5           # 连接后端超时 (秒)，0 表示无限制
 
 # 路由规则 - 按顺序匹配
 [[listeners.routes]]
-path = "/patch_slt"           # 路径匹配 (支持前缀匹配)
-action = "allow"              # 动作: drop (拒绝), allow (允许)
-rewrite_to = "/slt"           # 路径重写目标 (可选，将 /patch_slt 重写为 /slt)
-
-[[listeners.routes]]
 path = "/slt"                 # 路径匹配
 action = "drop"               # 拒绝访问
 response = "404"              # drop 时的响应: 404, 403, 502, close (直接关闭)
 
 [[listeners.routes]]
-path = "/admin"
+path = "/swt"
 action = "drop"
-response = "403"
+response = "404"
+
+[[listeners.routes]]
+path = "/patch_slt"
+action = "allow"
+rewrite_to = "/slt"
 
 [[listeners.routes]]
 path = "/"                    # 默认规则，匹配所有
@@ -45,7 +46,7 @@ action = "allow"
 name = "tcp_longconn"
 listen_port = ":9880"
 backend_addr = "127.0.0.1:9992"
-protocol = "tcp"              # 强制 TCP 模式，不检测 HTTP
+protocol = "tcp"              # TCP 协议
 
 [listeners.timeout]
 enabled = false               # 禁用超时，适合长连接
@@ -53,40 +54,3 @@ enabled = false               # 禁用超时，适合长连接
 [[listeners.routes]]
 path = "/"
 action = "allow"
-
-
-# 第三个监听器示例 - HTTP 反向代理
-[[listeners]]
-name = "api_proxy"
-listen_port = ":7880"
-backend_addr = "127.0.0.1:8000"
-protocol = "http"             # 强制 HTTP 模式
-
-[listeners.timeout]
-enabled = true
-initial_read = 60
-connect_backend = 10
-
-# 复杂的路由规则
-[[listeners.routes]]
-path = "/api/internal"        # 阻止内部 API 访问
-action = "drop"
-response = "403"
-
-[[listeners.routes]]
-path = "/api/admin"
-action = "drop"
-response = "404"
-
-[[listeners.routes]]
-path = "/health"              # 健康检查允许
-action = "allow"
-
-[[listeners.routes]]
-path = "/api"                 # 其他 API 允许
-action = "allow"
-
-[[listeners.routes]]
-path = "/"                    # 其他路径拒绝
-action = "drop"
-response = "404"

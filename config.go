@@ -112,13 +112,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("listener[%d]: backend_addr is required", i)
 		}
 
-		// 检查协议类型
-		validProtocols := map[string]bool{"auto": true, "http": true, "tcp": true}
-		if !validProtocols[listener.Protocol] {
-			return fmt.Errorf("listener[%d]: protocol must be one of: auto, http, tcp", i)
-		}
-
-		// 检查超时配置
+	// 检查协议类型
+	validProtocols := map[string]bool{"tcp": true}
+	if !validProtocols[listener.Protocol] {
+		return fmt.Errorf("listener[%d]: protocol must be: tcp", i)
+	}		// 检查超时配置
 		if listener.Timeout.InitialRead < 0 {
 			return fmt.Errorf("listener[%d]: timeout.initial_read cannot be negative", i)
 		}

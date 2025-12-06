@@ -7,11 +7,20 @@
 - 🚀 **高性能** - 高效的 TCP 代理转发
 - 🔌 **多端口监听** - 支持同时监听多个端口，各自独立配置
 - 🔒 **灵活的路由规则** - 基于路径的访问控制（允许/拒绝）
-- 🔄 **协议自动检测** - 自动识别 HTTP 和原始 TCP 流量
+- 🔄 **TCP 协议支持** - 支持 raw TCP 后端服务（包括 HTTP 和长连接）
 - ⚡ **长连接支持** - 可配置的超时策略，支持长期 TCP 连接
 - 🛡️ **恶意连接防护** - 可选的初始超时防止空连接占用资源
 - 📊 **详细日志** - 可配置的日志级别和连接跟踪
 - 📝 **TOML 配置** - 人性化的配置文件格式
+
+## 支持的后端协议
+
+**当前支持：**
+- ✅ **TCP** - 支持所有基于 TCP 的后端服务（包括 HTTP over TCP、长连接等）
+
+**未来计划（TODO）：**
+- ⏳ **KCP/UDP** - 基于 KCP 协议的 UDP 通信
+- ⏳ **WebSocket** - WebSocket 协议支持
 
 ## 架构
 
@@ -60,7 +69,7 @@ log_level = "info"
 name = "my_proxy"
 listen_port = ":8880"
 backend_addr = "127.0.0.1:9991"
-protocol = "auto"
+protocol = "tcp"
 
 [listeners.timeout]
 enabled = true
@@ -122,13 +131,12 @@ log_level = "info"   # 日志级别：debug, info, warn, error
 name = "listener_name"           # 监听器名称（用于日志）
 listen_port = ":8880"            # 监听端口
 backend_addr = "127.0.0.1:9991"  # 后端服务地址
-protocol = "auto"                # 协议：auto, http, tcp
+protocol = "tcp"                 # 协议类型：tcp
 ```
 
 **协议类型说明：**
-- `auto` - 自动检测 HTTP 或 TCP
-- `http` - 强制作为 HTTP 处理
-- `tcp` - 强制作为原始 TCP 处理（跳过 HTTP 检测）
+- `tcp` - TCP 协议（支持所有 TCP 后端，包括 HTTP over TCP 和长连接）
+- 未来支持：`kcp/udp`、`websocket`（见上方 TODO 列表）
 
 ### 超时配置
 
@@ -190,7 +198,7 @@ response = "404"
 name = "web_proxy"
 listen_port = ":8880"
 backend_addr = "127.0.0.1:8000"
-protocol = "http"
+protocol = "tcp"
 
 [listeners.timeout]
 enabled = true
@@ -237,7 +245,7 @@ action = "allow"
 name = "http_proxy"
 listen_port = ":8880"
 backend_addr = "127.0.0.1:9991"
-protocol = "auto"
+protocol = "tcp"
 
 [listeners.timeout]
 enabled = true
@@ -343,8 +351,8 @@ sudo systemctl disable vshell-firewall
 1. **连接建立** - 客户端连接到指定端口
 2. **初始超时** - 如果启用，设置初始读取超时（防止空连接）
 3. **数据读取** - 读取第一块数据（最多 4KB）
-4. **协议检测** - 根据配置自动检测或强制使用指定协议
-5. **路由匹配** - 对于 HTTP，匹配路径规则；对于 TCP，使用默认规则
+4. **协议处理** - 使用 TCP 协议处理（支持 HTTP over TCP）
+5. **路由匹配** - 检测 HTTP 请求并匹配路径规则；纯 TCP 使用默认规则
 6. **动作执行** - drop（拒绝）或 allow（转发到后端）
 7. **双向转发** - 建立客户端 ↔ 后端的双向流式传输
 8. **长连接支持** - 数据传输后移除超时限制

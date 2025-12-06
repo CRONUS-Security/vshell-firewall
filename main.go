@@ -64,8 +64,8 @@ func startListener(cfg ListenerConfig, global GlobalConfig) {
 	}
 	defer listener.Close()
 
-	log.Printf("[%s] Listening on %s, forwarding to %s (protocol: %s, timeout: %v)",
-		cfg.Name, cfg.ListenPort, cfg.BackendAddr, cfg.Protocol, cfg.Timeout.Enabled)
+	log.Printf("[%s] Listening on %s, forwarding to %s (timeout: %v)",
+		cfg.Name, cfg.ListenPort, cfg.BackendAddr, cfg.Timeout.Enabled)
 
 	for {
 		clientConn, err := listener.Accept()
@@ -105,16 +105,8 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 		clientConn.SetReadDeadline(time.Time{}) // 移除超时，支持长连接
 	}
 
-	// 根据协议类型处理
-	isHTTP := false
-	switch cfg.Protocol {
-	case "http":
-		isHTTP = true
-	case "tcp":
-		isHTTP = false
-	case "auto":
-		isHTTP = isHTTPRequest(initialData)
-	}
+	// 检测是否为 HTTP 请求
+	isHTTP := isHTTPRequest(initialData)
 
 	// HTTP 协议处理
 	if isHTTP {
