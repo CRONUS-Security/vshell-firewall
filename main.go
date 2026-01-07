@@ -16,14 +16,17 @@ import (
 var (
 	configFile = flag.String("config", "config.toml", "配置文件路径")
 	version    = flag.Bool("version", false, "显示版本信息")
-	
+
 	// 版本信息 (通过 -ldflags 注入)
 	Version   = "dev"
 	BuildTime = "unknown"
 	GitCommit = "unknown"
-	
+
 	// 全局 GeoIP 管理器
 	geoipManager *GeoIPManager
+
+	// 全局 VShell 防御模块
+	vshellDefense *VShellDefense
 )
 
 func main() {
@@ -61,6 +64,12 @@ func main() {
 	}
 	defer geoipManager.Close()
 
+	// 初始化 VShell 防御模块
+	vshellDefense = NewVShellDefense(config.Global.VShellDefense)
+	if config.Global.VShellDefense.Enabled {
+		log.Println("VShell defense module enabled")
+	}
+
 	// 启动所有监听器
 	var wg sync.WaitGroup
 	for _, listenerConfig := range config.Listeners {
@@ -92,7 +101,7 @@ func setupLogging(logFilePath string) (*os.File, error) {
 	// 创建多重写入器：同时写入文件和控制台
 	multiWriter := io.MultiWriter(os.Stdout, logFile)
 	log.SetOutput(multiWriter)
-	
+
 	// 设置日志格式：包含日期和时间
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
@@ -182,6 +191,43 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 		clientConn.SetReadDeadline(time.Time{}) // 移除超时，支持长连接
 	}
 
+	// VShell 防御检测
+	clientIP := getIPFromAddr(clientConn.RemoteAddr().String())
+	if vshellDefense != nil && vshellDefense.config.Enabled {
+		// 提取路径用于检测
+		path := ""
+		if isHTTPRequest(initialData) {
+			firstLineEnd := findFirstLine(initialData)
+			if firstLineEnd > 0 {
+				requestLine := string(initialData[:firstLineEnd])
+				path = extractHTTPPath(requestLine)
+			}
+		}
+
+		// 执行 VShell 检测
+		result := vshellDefense.CheckRequest(clientIP, initialData, path)
+		if result.IsBlocked {
+			if global.VShellDefense.LogAttempts {
+				LogVShellAttempt(clientIP, result.BlockReason, result.ThreatLevel, result.Details)
+			}
+			if global.LogLevel == "debug" || global.LogLevel == "info" {
+				log.Printf("[%s] VShell attack blocked from %s: %s (threat: %s)",
+					cfg.Name, clientIP, result.BlockReason, result.ThreatLevel)
+			}
+			// 发送适当的响应
+			if isHTTPRequest(initialData) {
+				sendErrorResponse(clientConn, "403")
+			}
+			return
+		}
+
+		// 检查连接是否可疑
+		isSuspicious, score := vshellDefense.IsConnectionSuspicious(clientIP)
+		if isSuspicious && global.LogLevel == "debug" {
+			log.Printf("[%s] Suspicious connection from %s (score: %d)", cfg.Name, clientIP, score)
+		}
+	}
+
 	// 检测是否为 HTTP 请求
 	isHTTP := isHTTPRequest(initialData)
 
@@ -264,18 +310,18 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 // forwardConnection 转发连接到后端
 func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []byte,
 	cfg ListenerConfig, global GlobalConfig, protocol string, processor *Processor) {
-	
+
 	// 连接后端
 	var backendConn net.Conn
 	var err error
-	
+
 	if cfg.Timeout.Enabled && cfg.Timeout.ConnectBackend > 0 {
 		backendConn, err = net.DialTimeout("tcp", cfg.BackendAddr,
 			time.Duration(cfg.Timeout.ConnectBackend)*time.Second)
 	} else {
 		backendConn, err = net.Dial("tcp", cfg.BackendAddr)
 	}
-	
+
 	if err != nil {
 		log.Printf("[%s] Failed to connect to backend %s: %v",
 			cfg.Name, cfg.BackendAddr, err)
@@ -314,7 +360,7 @@ func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []
 	go func() {
 		defer wg.Done()
 		buf := make([]byte, global.BufferSize)
-		
+
 		// 先读取 reader 缓冲中的剩余数据
 		for reader.Buffered() > 0 {
 			n, err := reader.Read(buf)
@@ -327,7 +373,7 @@ func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []
 				return
 			}
 		}
-		
+
 		// 然后直接从连接读取
 		io.CopyBuffer(backendConn, clientConn, buf)
 		if tcpConn, ok := backendConn.(*net.TCPConn); ok {
@@ -389,42 +435,42 @@ func rewriteHTTPPath(data []byte, fromPath, toPath string) []byte {
 			break
 		}
 	}
-	
+
 	if firstLineEnd < 0 {
 		return data
 	}
-	
+
 	requestLine := string(data[:firstLineEnd])
 	parts := strings.Split(requestLine, " ")
-	
+
 	// 检查是否需要重写路径
 	if len(parts) >= 3 {
 		path := parts[1]
-		
+
 		// 如果路径匹配 fromPath，则重写为 toPath
 		if strings.HasPrefix(path, fromPath) {
 			newPath := toPath + strings.TrimPrefix(path, fromPath)
 			parts[1] = newPath
-			
+
 			// 重新构造请求行
 			newRequestLine := strings.Join(parts, " ")
-			
+
 			// 构造新的请求数据
 			result := make([]byte, 0, len(data))
 			result = append(result, []byte(newRequestLine)...)
 			result = append(result, data[firstLineEnd:]...)
-			
+
 			return result
 		}
 	}
-	
+
 	return data
 }
 
 // sendErrorResponse 发送错误响应
 func sendErrorResponse(conn net.Conn, responseType string) {
 	var response string
-	
+
 	switch responseType {
 	case "404":
 		response = "HTTP/1.1 404 Not Found\r\n" +
@@ -450,7 +496,7 @@ func sendErrorResponse(conn net.Conn, responseType string) {
 	default:
 		return
 	}
-	
+
 	conn.Write([]byte(response))
 }
 

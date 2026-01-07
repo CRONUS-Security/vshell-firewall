@@ -23,6 +23,20 @@ start_time = "00:00"     # 允许连接的开始时间 (HH:MM 格式)
 end_time = "11:00"       # 允许连接的结束时间 (HH:MM 格式)
                          # 窗口外时，现有连接保持，但新的 TCP 连接请求会被丢弃
 
+# VShell 攻击防御配置
+# VShell 是一款流行的C2/RAT工具，此模块可检测并拦截其攻击流量
+[global.vshell_defense]
+enabled = true                        # 是否启用 VShell 防御
+block_websocket_upgrade = true        # 拦截可疑的 WebSocket 升级请求 (VShell通过WebSocket通信)
+block_version_handshake = true        # 拦截 VShell 版本握手 (如 "4.9.3" 等版本号)
+block_command_patterns = true         # 拦截 VShell 命令模式 (conf, file, sucs 等)
+block_encrypted_payloads = true       # 拦截可疑的加密载荷 (AES-GCM 加密数据特征)
+block_vkey_patterns = true            # 拦截 Vkey 哈希模式 (MD5 哈希认证)
+block_suspicious_paths = true         # 拦截可疑路径 (/ws, /websocket, /beacon 等)
+custom_block_paths = ["/c2", "/shell", "/cmd"]  # 自定义拦截路径列表
+blocked_vkeys = []                    # 已知恶意 Vkey 黑名单 (可添加已知的 vkey 值)
+log_attempts = true                   # 记录所有攻击尝试到日志
+
 # 监听端口配置 - 可以配置多个
 [[listeners]]
 name = "http_proxy"              # 监听器名称

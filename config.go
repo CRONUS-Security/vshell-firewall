@@ -17,11 +17,26 @@ type Config struct {
 
 // GlobalConfig 全局配置
 type GlobalConfig struct {
-	BufferSize   int              `toml:"buffer_size"`
-	LogLevel     string           `toml:"log_level"`
-	LogFile      string           `toml:"log_file"` // 日志文件路径，为空则只输出到控制台
-	GeoIP        GeoIPConfig      `toml:"geoip"`
-	TimeWindow   TimeWindowConfig `toml:"time_window"`
+	BufferSize    int                 `toml:"buffer_size"`
+	LogLevel      string              `toml:"log_level"`
+	LogFile       string              `toml:"log_file"` // 日志文件路径，为空则只输出到控制台
+	GeoIP         GeoIPConfig         `toml:"geoip"`
+	TimeWindow    TimeWindowConfig    `toml:"time_window"`
+	VShellDefense VShellDefenseConfig `toml:"vshell_defense"` // VShell 攻击防御配置
+}
+
+// VShellDefenseConfig VShell 防御配置
+type VShellDefenseConfig struct {
+	Enabled                bool     `toml:"enabled"`                  // 是否启用 VShell 防御
+	BlockWebSocketUpgrade  bool     `toml:"block_websocket_upgrade"`  // 拦截可疑的 WebSocket 升级请求
+	BlockVersionHandshake  bool     `toml:"block_version_handshake"`  // 拦截 VShell 版本握手
+	BlockCommandPatterns   bool     `toml:"block_command_patterns"`   // 拦截 VShell 命令模式
+	BlockEncryptedPayloads bool     `toml:"block_encrypted_payloads"` // 拦截可疑的加密载荷
+	BlockVkeyPatterns      bool     `toml:"block_vkey_patterns"`      // 拦截 Vkey 哈希模式
+	BlockSuspiciousPaths   bool     `toml:"block_suspicious_paths"`   // 拦截可疑路径
+	CustomBlockPaths       []string `toml:"custom_block_paths"`       // 自定义拦截路径
+	BlockedVkeys           []string `toml:"blocked_vkeys"`            // 已知恶意 Vkey 黑名单
+	LogAttempts            bool     `toml:"log_attempts"`             // 记录攻击尝试
 }
 
 // GeoIPConfig GeoIP 配置
@@ -70,13 +85,13 @@ type TCPProcessorConfig struct {
 
 // Processor 处理器规则
 type Processor struct {
-	Path       interface{} `toml:"path"`      // string 或 []string
-	MatchMode  string      `toml:"match_mode"` // prefix (前缀), exact (精确), regex (正则)
-	Action     string      `toml:"action"`     // allow, drop, rewrite, file, proxy
-	Response   string      `toml:"response"`   // 404, 403, 502, close (用于 drop)
-	RewriteTo  string      `toml:"rewrite_to"` // 路径重写目标 (用于 rewrite)
-	File       string      `toml:"file"`       // 文件路径 (用于 file)
-	ProxyTo    string      `toml:"proxy_to"`   // 代理目标 (用于 proxy)
+	Path      interface{} `toml:"path"`       // string 或 []string
+	MatchMode string      `toml:"match_mode"` // prefix (前缀), exact (精确), regex (正则)
+	Action    string      `toml:"action"`     // allow, drop, rewrite, file, proxy
+	Response  string      `toml:"response"`   // 404, 403, 502, close (用于 drop)
+	RewriteTo string      `toml:"rewrite_to"` // 路径重写目标 (用于 rewrite)
+	File      string      `toml:"file"`       // 文件路径 (用于 file)
+	ProxyTo   string      `toml:"proxy_to"`   // 代理目标 (用于 proxy)
 }
 
 // RouteRule 路由规则（兼容旧配置）
@@ -173,11 +188,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("listener[%d]: backend_addr is required", i)
 		}
 
-	// 检查协议类型
-	validProtocols := map[string]bool{"tcp": true}
-	if !validProtocols[listener.Protocol] {
-		return fmt.Errorf("listener[%d]: protocol must be: tcp", i)
-	}		// 检查超时配置
+		// 检查协议类型
+		validProtocols := map[string]bool{"tcp": true}
+		if !validProtocols[listener.Protocol] {
+			return fmt.Errorf("listener[%d]: protocol must be: tcp", i)
+		} // 检查超时配置
 		if listener.Timeout.InitialRead < 0 {
 			return fmt.Errorf("listener[%d]: timeout.initial_read cannot be negative", i)
 		}
@@ -226,7 +241,7 @@ func (c *Config) Validate() error {
 func validateProcessor(proc Processor, listenerIdx int, processorType string, procIdx int) error {
 	validActions := map[string]bool{"allow": true, "drop": true, "rewrite": true, "file": true, "proxy": true}
 	if !validActions[proc.Action] {
-		return fmt.Errorf("listener[%d].%s.processor[%d]: action must be one of: allow, drop, rewrite, file, proxy", 
+		return fmt.Errorf("listener[%d].%s.processor[%d]: action must be one of: allow, drop, rewrite, file, proxy",
 			listenerIdx, processorType, procIdx)
 	}
 
@@ -234,7 +249,7 @@ func validateProcessor(proc Processor, listenerIdx int, processorType string, pr
 	if proc.MatchMode != "" {
 		validModes := map[string]bool{"prefix": true, "exact": true, "regex": true}
 		if !validModes[proc.MatchMode] {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: match_mode must be one of: prefix, exact, regex", 
+			return fmt.Errorf("listener[%d].%s.processor[%d]: match_mode must be one of: prefix, exact, regex",
 				listenerIdx, processorType, procIdx)
 		}
 	}
@@ -244,22 +259,22 @@ func validateProcessor(proc Processor, listenerIdx int, processorType string, pr
 	case "drop":
 		validResponses := map[string]bool{"404": true, "403": true, "502": true, "close": true}
 		if proc.Response != "" && !validResponses[proc.Response] {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: response must be one of: 404, 403, 502, close", 
+			return fmt.Errorf("listener[%d].%s.processor[%d]: response must be one of: 404, 403, 502, close",
 				listenerIdx, processorType, procIdx)
 		}
 	case "rewrite":
 		if proc.RewriteTo == "" {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: rewrite_to is required for rewrite action", 
+			return fmt.Errorf("listener[%d].%s.processor[%d]: rewrite_to is required for rewrite action",
 				listenerIdx, processorType, procIdx)
 		}
 	case "file":
 		if proc.File == "" {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: file is required for file action", 
+			return fmt.Errorf("listener[%d].%s.processor[%d]: file is required for file action",
 				listenerIdx, processorType, procIdx)
 		}
 	case "proxy":
 		if proc.ProxyTo == "" {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: proxy_to is required for proxy action", 
+			return fmt.Errorf("listener[%d].%s.processor[%d]: proxy_to is required for proxy action",
 				listenerIdx, processorType, procIdx)
 		}
 	}
@@ -355,19 +370,19 @@ func validateTimeWindowConfig(tw *TimeWindowConfig) error {
 	if tw.Timezone == "" {
 		return fmt.Errorf("timezone is required")
 	}
-	
+
 	// 验证时区
 	if _, err := time.LoadLocation(tw.Timezone); err != nil {
 		return fmt.Errorf("invalid timezone '%s': %w", tw.Timezone, err)
 	}
-	
+
 	if tw.StartTime == "" {
 		return fmt.Errorf("start_time is required")
 	}
 	if tw.EndTime == "" {
 		return fmt.Errorf("end_time is required")
 	}
-	
+
 	// 验证时间格式
 	if _, err := time.Parse("15:04", tw.StartTime); err != nil {
 		return fmt.Errorf("invalid start_time format '%s', expected HH:MM", tw.StartTime)
@@ -375,7 +390,7 @@ func validateTimeWindowConfig(tw *TimeWindowConfig) error {
 	if _, err := time.Parse("15:04", tw.EndTime); err != nil {
 		return fmt.Errorf("invalid end_time format '%s', expected HH:MM", tw.EndTime)
 	}
-	
+
 	return nil
 }
 
@@ -384,26 +399,26 @@ func (tw *TimeWindowConfig) IsInTimeWindow() (bool, error) {
 	if !tw.Enabled {
 		return true, nil
 	}
-	
+
 	// 加载时区
 	loc, err := time.LoadLocation(tw.Timezone)
 	if err != nil {
 		return false, fmt.Errorf("failed to load timezone: %w", err)
 	}
-	
+
 	// 获取当前时间（在指定时区）
 	now := time.Now().In(loc)
 	currentHour := now.Hour()
 	currentMinute := now.Minute()
 	currentTimeInMinutes := currentHour*60 + currentMinute
-	
+
 	// 解析开始和结束时间
 	startTime, _ := time.Parse("15:04", tw.StartTime)
 	endTime, _ := time.Parse("15:04", tw.EndTime)
-	
+
 	startMinutes := startTime.Hour()*60 + startTime.Minute()
 	endMinutes := endTime.Hour()*60 + endTime.Minute()
-	
+
 	// 检查是否在时间窗口内
 	if startMinutes <= endMinutes {
 		// 正常情况：start_time < end_time (如 00:00 - 11:00)
