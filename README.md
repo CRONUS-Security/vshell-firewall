@@ -2,6 +2,10 @@
 
 VShell 基础设施指纹隐藏与访问控制代理 - 通过流量过滤和指纹阻断，保护 VShell C2 基础设施免受公开扫描和威胁情报追踪。
 
+<img width="2164" height="1125" alt="img" src="https://github.com/user-attachments/assets/c9afb8f6-bbba-46cc-913f-ca6717a064c6" />
+
+你也不想你的 vshell 被人批量上线吧
+
 ## 项目背景
 
 随着 NVISO 等安全厂商公开 [VShell 后渗透工具分析报告](https://www.nviso.eu/blog/nviso-analyzes-vshell-post-exploitation-tool)，VShell 的网络特征指纹、通信模式和基础设施标识已被广泛公开。威胁情报机构如 Team Cymru、ThreatFox 等正在全球范围内追踪和标记 VShell C2 服务器。
