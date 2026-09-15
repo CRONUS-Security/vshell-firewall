@@ -30,9 +30,6 @@ var (
 
 	// 全局 GeoIP 管理器
 	geoipManager *GeoIPManager
-
-	// 全局 VShell 防御模块
-	vshellDefense *VShellDefense
 )
 
 func main() {
@@ -69,12 +66,6 @@ func main() {
 		log.Fatalf("Failed to initialize GeoIP manager: %v", err)
 	}
 	defer geoipManager.Close()
-
-	// 初始化 VShell 防御模块
-	vshellDefense = NewVShellDefense(config.Global.VShellDefense)
-	if config.Global.VShellDefense.Enabled {
-		log.Println("VShell defense module enabled")
-	}
 
 	// 启动所有监听器
 	var wg sync.WaitGroup
@@ -198,31 +189,12 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 	}
 
 	// 解析请求信息
-	clientIP := getIPFromAddr(clientConn.RemoteAddr().String())
 	isHTTP := isHTTPRequest(initialData)
 	path := ""
 	if isHTTP {
 		firstLineEnd := findFirstLine(initialData)
 		if firstLineEnd > 0 {
 			path = extractHTTPPath(string(initialData[:firstLineEnd]))
-		}
-	}
-
-	// VShell 防御检测
-	if vshellDefense != nil && vshellDefense.config.Enabled {
-		result := vshellDefense.CheckRequest(clientIP, initialData, path)
-		if result.IsBlocked {
-			if global.VShellDefense.LogAttempts {
-				LogVShellAttempt(clientIP, result.BlockReason, result.ThreatLevel, result.Details)
-			}
-			if global.LogLevel == "debug" || global.LogLevel == "info" {
-				log.Printf("[%s] VShell attack blocked from %s: %s (threat: %s)",
-					cfg.Name, clientIP, result.BlockReason, result.ThreatLevel)
-			}
-			if isHTTP {
-				sendErrorResponse(clientConn, "403")
-			}
-			return
 		}
 	}
 

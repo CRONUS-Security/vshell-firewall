@@ -17,26 +17,11 @@ type Config struct {
 
 // GlobalConfig 全局配置
 type GlobalConfig struct {
-	BufferSize    int                 `toml:"buffer_size"`
-	LogLevel      string              `toml:"log_level"`
-	LogFile       string              `toml:"log_file"` // 日志文件路径，为空则只输出到控制台
-	GeoIP         GeoIPConfig         `toml:"geoip"`
-	TimeWindow    TimeWindowConfig    `toml:"time_window"`
-	VShellDefense VShellDefenseConfig `toml:"vshell_defense"` // VShell 攻击防御配置
-}
-
-// VShellDefenseConfig VShell 防御配置
-type VShellDefenseConfig struct {
-	Enabled                bool     `toml:"enabled"`                  // 是否启用 VShell 防御
-	BlockWebSocketUpgrade  bool     `toml:"block_websocket_upgrade"`  // 拦截可疑的 WebSocket 升级请求
-	BlockVersionHandshake  bool     `toml:"block_version_handshake"`  // 拦截 VShell 版本握手
-	BlockCommandPatterns   bool     `toml:"block_command_patterns"`   // 拦截 VShell 命令模式
-	BlockEncryptedPayloads bool     `toml:"block_encrypted_payloads"` // 拦截可疑的加密载荷
-	BlockVkeyPatterns      bool     `toml:"block_vkey_patterns"`      // 拦截 Vkey 哈希模式
-	BlockSuspiciousPaths   bool     `toml:"block_suspicious_paths"`   // 拦截可疑路径
-	CustomBlockPaths       []string `toml:"custom_block_paths"`       // 自定义拦截路径
-	BlockedVkeys           []string `toml:"blocked_vkeys"`            // 已知恶意 Vkey 黑名单
-	LogAttempts            bool     `toml:"log_attempts"`             // 记录攻击尝试
+	BufferSize int              `toml:"buffer_size"`
+	LogLevel   string           `toml:"log_level"`
+	LogFile    string           `toml:"log_file"` // 日志文件路径，为空则只输出到控制台
+	GeoIP      GeoIPConfig      `toml:"geoip"`
+	TimeWindow TimeWindowConfig `toml:"time_window"`
 }
 
 // GeoIPConfig GeoIP 配置
