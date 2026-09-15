@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	_ "embed"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +13,11 @@ import (
 	"sync"
 	"time"
 )
+
+// 内建伪装页面（编译时嵌入），未指定 file 参数时默认返回
+//
+//go:embed resource/index.html
+var stealthPage []byte
 
 var (
 	configFile = flag.String("config", "config.toml", "配置文件路径")
@@ -191,20 +197,19 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 		clientConn.SetReadDeadline(time.Time{}) // 移除超时，支持长连接
 	}
 
-	// VShell 防御检测
+	// 解析请求信息
 	clientIP := getIPFromAddr(clientConn.RemoteAddr().String())
-	if vshellDefense != nil && vshellDefense.config.Enabled {
-		// 提取路径用于检测
-		path := ""
-		if isHTTPRequest(initialData) {
-			firstLineEnd := findFirstLine(initialData)
-			if firstLineEnd > 0 {
-				requestLine := string(initialData[:firstLineEnd])
-				path = extractHTTPPath(requestLine)
-			}
+	isHTTP := isHTTPRequest(initialData)
+	path := ""
+	if isHTTP {
+		firstLineEnd := findFirstLine(initialData)
+		if firstLineEnd > 0 {
+			path = extractHTTPPath(string(initialData[:firstLineEnd]))
 		}
+	}
 
-		// 执行 VShell 检测
+	// VShell 防御检测
+	if vshellDefense != nil && vshellDefense.config.Enabled {
 		result := vshellDefense.CheckRequest(clientIP, initialData, path)
 		if result.IsBlocked {
 			if global.VShellDefense.LogAttempts {
@@ -214,49 +219,31 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 				log.Printf("[%s] VShell attack blocked from %s: %s (threat: %s)",
 					cfg.Name, clientIP, result.BlockReason, result.ThreatLevel)
 			}
-			// 发送适当的响应
-			if isHTTPRequest(initialData) {
+			if isHTTP {
 				sendErrorResponse(clientConn, "403")
 			}
 			return
 		}
-
-		// 检查连接是否可疑
-		isSuspicious, score := vshellDefense.IsConnectionSuspicious(clientIP)
-		if isSuspicious && global.LogLevel == "debug" {
-			log.Printf("[%s] Suspicious connection from %s (score: %d)", cfg.Name, clientIP, score)
-		}
 	}
-
-	// 检测是否为 HTTP 请求
-	isHTTP := isHTTPRequest(initialData)
 
 	// HTTP 协议处理
 	if isHTTP {
-		// 查找第一行（请求行）
-		firstLineEnd := findFirstLine(initialData)
-		var path string
-		var requestLine string
-
-		if firstLineEnd > 0 {
-			requestLine = string(initialData[:firstLineEnd])
-			path = extractHTTPPath(requestLine)
-		}
-
 		// 匹配 HTTP 处理器
 		processor := cfg.MatchHTTPProcessor(path)
 		if processor == nil {
-			// 没有匹配的处理器，默认拒绝
-			log.Printf("[%s] No HTTP processor matched for path '%s' from %s, dropping",
-				cfg.Name, path, clientConn.RemoteAddr())
-			sendErrorResponse(clientConn, "404")
+			// 没有匹配的处理器，返回内建伪装页面（隐匿）
+			if global.LogLevel == "debug" || global.LogLevel == "info" {
+				log.Printf("[%s] HTTP request to '%s' from %s matched no processor, serving stealth page",
+					cfg.Name, path, clientConn.RemoteAddr())
+			}
+			serveStatic(clientConn, "", cfg.Name)
 			return
 		}
 
 		// 执行处理器动作
 		if global.LogLevel == "debug" || global.LogLevel == "info" {
 			log.Printf("[%s] HTTP request: %s from %s, action: %s",
-				cfg.Name, strings.TrimSpace(requestLine), clientConn.RemoteAddr(), processor.Action)
+				cfg.Name, path, clientConn.RemoteAddr(), processor.Action)
 		}
 
 		switch processor.Action {
@@ -273,13 +260,13 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 			return
 
 		case "file":
-			// 返回文件内容
-			serveFile(clientConn, processor.File, cfg.Name)
+			// 返回静态资源（file 为空时使用内建伪装页面）
+			serveStatic(clientConn, processor.File, cfg.Name)
 			return
 
 		case "allow", "rewrite":
-			// 允许通过或重写后转发
-			forwardConnection(clientConn, reader, initialData, cfg, global, "HTTP", processor)
+			// 允许通过或重写虚拟路径后转发
+			forwardConnection(clientConn, reader, initialData, path, cfg, global, "HTTP", processor)
 		}
 	} else {
 		// TCP 协议处理
@@ -302,13 +289,13 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 			return
 
 		case "allow":
-			forwardConnection(clientConn, reader, initialData, cfg, global, "TCP", processor)
+			forwardConnection(clientConn, reader, initialData, "", cfg, global, "TCP", processor)
 		}
 	}
 }
 
 // forwardConnection 转发连接到后端
-func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []byte,
+func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []byte, path string,
 	cfg ListenerConfig, global GlobalConfig, protocol string, processor *Processor) {
 
 	// 连接后端
@@ -332,14 +319,13 @@ func forwardConnection(clientConn net.Conn, reader *bufio.Reader, initialData []
 	}
 	defer backendConn.Close()
 
-	// 对于 HTTP 协议，如果配置了路径重写，则重写请求
+	// 对于 HTTP 协议，如果配置了路径重写，将虚拟路径重写为后端真实路径
 	dataToSend := initialData
 	if protocol == "HTTP" && processor != nil && processor.Action == "rewrite" && processor.RewriteTo != "" {
-		paths := processor.GetPaths()
-		if len(paths) > 0 {
-			dataToSend = rewriteHTTPPath(initialData, paths[0], processor.RewriteTo)
+		if from := processor.MatchedPrefix(path); from != "" {
+			dataToSend = rewriteHTTPPath(initialData, from, processor.RewriteTo)
 			if global.LogLevel == "debug" {
-				log.Printf("[%s] Rewriting path from %s to %s", cfg.Name, paths[0], processor.RewriteTo)
+				log.Printf("[%s] Rewriting path from %s to %s", cfg.Name, from, processor.RewriteTo)
 			}
 		}
 	}
@@ -500,30 +486,27 @@ func sendErrorResponse(conn net.Conn, responseType string) {
 	conn.Write([]byte(response))
 }
 
-// serveFile 返回文件内容作为 HTTP 响应
-func serveFile(conn net.Conn, filePath string, listenerName string) {
-	// 读取文件内容
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		log.Printf("[%s] Error reading file %s: %v", listenerName, filePath, err)
-		sendErrorResponse(conn, "404")
-		return
-	}
-
-	// 检测 Content-Type
+// serveStatic 返回静态资源作为 HTTP 响应，filePath 为空时使用内建伪装页面
+func serveStatic(conn net.Conn, filePath string, listenerName string) {
+	var data []byte
 	contentType := "text/html; charset=utf-8"
-	if strings.HasSuffix(filePath, ".json") {
-		contentType = "application/json"
-	} else if strings.HasSuffix(filePath, ".txt") {
-		contentType = "text/plain; charset=utf-8"
-	} else if strings.HasSuffix(filePath, ".css") {
-		contentType = "text/css"
-	} else if strings.HasSuffix(filePath, ".js") {
-		contentType = "application/javascript"
+
+	if filePath == "" {
+		data = stealthPage
+	} else {
+		var err error
+		data, err = os.ReadFile(filePath)
+		if err != nil {
+			log.Printf("[%s] Error reading file %s: %v", listenerName, filePath, err)
+			sendErrorResponse(conn, "404")
+			return
+		}
+		contentType = detectContentType(filePath)
 	}
 
-	// 构造 HTTP 响应
+	// 构造 HTTP 响应（伪装 nginx 服务器）
 	response := fmt.Sprintf("HTTP/1.1 200 OK\r\n"+
+		"Server: nginx\r\n"+
 		"Content-Type: %s\r\n"+
 		"Content-Length: %d\r\n"+
 		"Connection: close\r\n"+
@@ -531,6 +514,22 @@ func serveFile(conn net.Conn, filePath string, listenerName string) {
 
 	conn.Write([]byte(response))
 	conn.Write(data)
+}
+
+// detectContentType 根据文件扩展名推断 Content-Type
+func detectContentType(filePath string) string {
+	switch {
+	case strings.HasSuffix(filePath, ".json"):
+		return "application/json"
+	case strings.HasSuffix(filePath, ".txt"):
+		return "text/plain; charset=utf-8"
+	case strings.HasSuffix(filePath, ".css"):
+		return "text/css"
+	case strings.HasSuffix(filePath, ".js"):
+		return "application/javascript"
+	default:
+		return "text/html; charset=utf-8"
+	}
 }
 
 // getIPFromAddr 从地址字符串中提取 IP

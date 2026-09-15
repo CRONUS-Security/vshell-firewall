@@ -2,16 +2,13 @@
 
 VShell 基础设施指纹隐藏与访问控制代理 - 通过流量过滤和指纹阻断，保护 VShell C2 基础设施免受公开扫描和威胁情报追踪。
 
-<img width="2164" height="1125" alt="img" src="https://github.com/user-attachments/assets/c9afb8f6-bbba-46cc-913f-ca6717a064c6" />
-
-你也不想你的 vshell 被人批量上线吧
-
 ## 项目背景
 
 随着 NVISO 等安全厂商公开 [VShell 后渗透工具分析报告](https://www.nviso.eu/blog/nviso-analyzes-vshell-post-exploitation-tool)，VShell 的网络特征指纹、通信模式和基础设施标识已被广泛公开。威胁情报机构如 Team Cymru、ThreatFox 等正在全球范围内追踪和标记 VShell C2 服务器。
 
 **vshell-firewall** 是一个专门设计的反向代理防护系统，旨在：
-- 🛡️ **隐藏 VShell 指纹** - 阻断已知的指纹识别请求，防止 C2 基础设施被自动化扫描发现
+
+- 🛡️ **隐藏 VShell 指纹** - 阻断已知的识别请求，防止 C2 基础设施被自动化扫描发现
 - 🔒 **访问控制** - 基于地理位置、时间窗口、路径特征的多维度访问过滤
 - 🎭 **流量混淆** - 通过路由规则和响应定制，混淆真实的后端服务特征
 - 📊 **威胁感知** - 记录所有扫描和探测行为，提供威胁情报反馈
@@ -19,18 +16,19 @@ VShell 基础设施指纹隐藏与访问控制代理 - 通过流量过滤和指�
 ## 核心特性
 
 ### 🛡️ 指纹隐藏与防护
-- **网络特征过滤** - 拦截针对 VShell stager（Windows/Linux/MacOS）的指纹探测
-- **行为模式隐藏** - 阻断 beaconing 活动的特征识别请求
-- **路径级访问控制** - 精细化的 HTTP 路径白名单/黑名单机制
+
+- **网络特征过滤** - 拦截针对 VShell stager 路由的探测请求
 - **自定义响应** - 为扫描请求返回伪装响应，混淆真实服务指纹
 
 ### 🌍 地理位置与时间控制
+
 - **GeoIP 过滤** - 拦截来自特定国家/地区的威胁情报扫描（如美国、欧洲等威胁追踪热点）
 - **时间窗口限制** - 仅在指定时间段内允许连接，降低暴露时长
 - **时区自定义** - 支持全球时区配置，匹配目标地区的活动时间
 
 ### 🚀 高性能代理架构
-- **多端口监听** - 同时保护多个 VShell 实例，各自独立配置
+
+- **多端口监听** - 同时保护多个 VShell listener 实例，各自独立配置
 - **TCP 全协议支持** - 支持 VShell 的所有 TCP 通信模式（HTTP over TCP、长连接等）
 - **智能超时策略** - 防护空连接攻击，同时保持合法长连接稳定
 - **高效转发** - 低延迟的透明代理，不影响 VShell 正常通信性能
@@ -136,20 +134,21 @@ enabled = true
 initial_read = 30    # 30 秒初始超时，防止空连接扫描
 connect_backend = 5  # 5 秒后端连接超时
 
-# 路径防护规则（针对 HTTP 探测）
-[[listeners.routes]]
+# HTTP 处理器（针对 HTTP 探测）
+[[listeners.http.processor]]
 path = "/favicon.ico"
 action = "drop"
 response = "404"  # 拦截常见的指纹探测请求
 
-[[listeners.routes]]
+[[listeners.http.processor]]
 path = "/robots.txt"
 action = "drop"
 response = "404"
 
-[[listeners.routes]]
+# 其余所有 HTTP 请求（含 /）返回内建伪装页面（隐匿）
+[[listeners.http.processor]]
 path = "/"
-action = "allow"  # 允许根路径（VShell 正常通信）
+action = "file"
 ```
 
 ### 4. 运行与部署
@@ -284,53 +283,59 @@ connect_backend = 5  # 后端连接超时（秒），0 = 无限制
   - 适用于确定无扫描威胁的内网环境
   - 节省资源但失去空连接防护
 
-### 路径过滤规则（HTTP 指纹防护）
+### HTTP 处理器（路径指纹防护）
 
-路由规则按顺序匹配，支持前缀匹配和精确匹配：
+处理器按配置顺序匹配（前缀匹配，`path` 支持 string 或数组），第一个匹配的生效：
 
 ```toml
-[[listeners.routes]]
-path = "/slt"      # 路径（前缀匹配）
-action = "drop"      # 动作：drop（拦截）或 allow（放行）
-response = "404"     # 拦截时的响应类型
+[[listeners.http.processor]]
+path = "/slt"      # 路径（前缀匹配，支持 string 或数组）
+action = "drop"    # 动作：drop（拦截）、rewrite（重写转发）、file（静态页面）、allow（直接转发）
+response = "404"   # 拦截时的响应类型
 ```
 
-**响应类型：**
+**动作类型：**
+- `drop` - 直接拦截，返回指定响应
+- `rewrite` - 将虚拟路径重写为真实路径后转发到后端（`rewrite_to` 指定目标路径）
+- `file` - 返回静态页面；未指定 `file` 参数时默认返回编译内建的伪装页面（resource/index.html）
+- `allow` - 不做修改，直接转发到后端
+
+**响应类型（用于 drop）：**
 - `404` - 返回 404 Not Found（伪装成不存在）
 - `403` - 返回 403 Forbidden（显示禁止访问）
 - `502` - 返回 502 Bad Gateway（伪装成网关错误）
 - `close` - 直接关闭连接（无响应，更隐蔽）
 
-**VShell 指纹防护规则示例：**
+**VShell 虚拟路径防护规则示例：**
 
 ```toml
-# 拦截常见的 Web 指纹探测
-[[listeners.routes]]
-path = "/favicon.ico"
+# 对外虚拟路径，重写为后端真实路径后转发
+[[listeners.http.processor]]
+path = "/patch_swt"
+action = "rewrite"
+rewrite_to = "/swt"
+
+[[listeners.http.processor]]
+path = "/patch_slt"
+action = "rewrite"
+rewrite_to = "/slt"
+
+# 直接访问真实路径则拦截
+[[listeners.http.processor]]
+path = ["/slt", "/swt"]
 action = "drop"
 response = "404"
 
-[[listeners.routes]]
-path = "/robots.txt"
-action = "drop"
-response = "404"
-
-# 拦截已知的 VShell 探测路径（根据威胁情报更新）
-[[listeners.routes]]
-path = "/slt"
-action = "drop"
-response = "404"
-
-[[listeners.routes]]
-path = "/swt"
-action = "drop"
-response = "404"
+# 其余所有 HTTP 请求（含 /）返回内建伪装页面（隐匿）
+[[listeners.http.processor]]
+path = "/"
+action = "file"
 ```
 
 **规则匹配顺序：**
-- 规则按配置顺序从上到下匹配
-- 第一个匹配的规则生效
-- 最后建议添加兜底规则（如拦截所有其他路径）
+- 处理器按配置顺序从上到下匹配
+- 第一个匹配的处理器生效
+- 未匹配任何处理器的 HTTP 请求同样返回内建伪装页面（隐匿兜底）
 
 ## 威胁情报与检测对抗
 
@@ -357,7 +362,7 @@ response = "404"
 
 | 检测手段 | 防护措施 | 配置项 |
 |---------|---------|--------|
-| 网络指纹扫描 | 路径过滤 + 自定义响应 | `listeners.routes` |
+| 网络指纹扫描 | 路径过滤 + 自定义响应 | `listeners.http.processor` |
 | 地理位置追踪 | GeoIP 拦截热点地区 | `global.geoip` |
 | 持续监控 | 时间窗口限制暴露 | `global.time_window` |
 | 空连接探测 | 初始超时防护 | `listeners.timeout.initial_read` |

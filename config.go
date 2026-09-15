@@ -63,7 +63,6 @@ type ListenerConfig struct {
 	Timeout     TimeoutConfig       `toml:"timeout"`
 	HTTP        HTTPProcessorConfig `toml:"http"`
 	TCP         TCPProcessorConfig  `toml:"tcp"`
-	Routes      []RouteRule         `toml:"routes"` // 兼容旧配置，优先使用 HTTP/TCP processor
 }
 
 // TimeoutConfig 超时配置
@@ -85,21 +84,11 @@ type TCPProcessorConfig struct {
 
 // Processor 处理器规则
 type Processor struct {
-	Path      interface{} `toml:"path"`       // string 或 []string
-	MatchMode string      `toml:"match_mode"` // prefix (前缀), exact (精确), regex (正则)
-	Action    string      `toml:"action"`     // allow, drop, rewrite, file, proxy
+	Path      interface{} `toml:"path"`       // string 或 []string（前缀匹配）
+	Action    string      `toml:"action"`     // drop, rewrite, file (HTTP); allow, drop (TCP)
 	Response  string      `toml:"response"`   // 404, 403, 502, close (用于 drop)
 	RewriteTo string      `toml:"rewrite_to"` // 路径重写目标 (用于 rewrite)
-	File      string      `toml:"file"`       // 文件路径 (用于 file)
-	ProxyTo   string      `toml:"proxy_to"`   // 代理目标 (用于 proxy)
-}
-
-// RouteRule 路由规则（兼容旧配置）
-type RouteRule struct {
-	Path      string `toml:"path"`
-	Action    string `toml:"action"`     // drop, allow
-	Response  string `toml:"response"`   // 404, 403, 502, close
-	RewriteTo string `toml:"rewrite_to"` // 路径重写目标（可选）
+	File      string      `toml:"file"`       // 文件路径 (用于 file，为空则使用内建伪装页面)
 }
 
 // LoadConfig 从文件加载配置
@@ -213,25 +202,6 @@ func (c *Config) Validate() error {
 				return err
 			}
 		}
-
-		// 检查旧的路由规则（兼容性）
-		for j, route := range listener.Routes {
-			if route.Path == "" {
-				return fmt.Errorf("listener[%d].route[%d]: path is required", i, j)
-			}
-
-			validActions := map[string]bool{"drop": true, "allow": true}
-			if !validActions[route.Action] {
-				return fmt.Errorf("listener[%d].route[%d]: action must be one of: drop, allow", i, j)
-			}
-
-			if route.Action == "drop" {
-				validResponses := map[string]bool{"404": true, "403": true, "502": true, "close": true}
-				if !validResponses[route.Response] {
-					return fmt.Errorf("listener[%d].route[%d]: response must be one of: 404, 403, 502, close", i, j)
-				}
-			}
-		}
 	}
 
 	return nil
@@ -239,19 +209,10 @@ func (c *Config) Validate() error {
 
 // validateProcessor 验证处理器配置
 func validateProcessor(proc Processor, listenerIdx int, processorType string, procIdx int) error {
-	validActions := map[string]bool{"allow": true, "drop": true, "rewrite": true, "file": true, "proxy": true}
+	validActions := map[string]bool{"allow": true, "drop": true, "rewrite": true, "file": true}
 	if !validActions[proc.Action] {
-		return fmt.Errorf("listener[%d].%s.processor[%d]: action must be one of: allow, drop, rewrite, file, proxy",
+		return fmt.Errorf("listener[%d].%s.processor[%d]: action must be one of: allow, drop, rewrite, file",
 			listenerIdx, processorType, procIdx)
-	}
-
-	// 验证匹配模式
-	if proc.MatchMode != "" {
-		validModes := map[string]bool{"prefix": true, "exact": true, "regex": true}
-		if !validModes[proc.MatchMode] {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: match_mode must be one of: prefix, exact, regex",
-				listenerIdx, processorType, procIdx)
-		}
 	}
 
 	// 验证 action 特定的配置
@@ -265,16 +226,6 @@ func validateProcessor(proc Processor, listenerIdx int, processorType string, pr
 	case "rewrite":
 		if proc.RewriteTo == "" {
 			return fmt.Errorf("listener[%d].%s.processor[%d]: rewrite_to is required for rewrite action",
-				listenerIdx, processorType, procIdx)
-		}
-	case "file":
-		if proc.File == "" {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: file is required for file action",
-				listenerIdx, processorType, procIdx)
-		}
-	case "proxy":
-		if proc.ProxyTo == "" {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: proxy_to is required for proxy action",
 				listenerIdx, processorType, procIdx)
 		}
 	}
@@ -322,47 +273,28 @@ func (l *ListenerConfig) MatchTCPProcessor() *Processor {
 	return nil
 }
 
-// matchPath 匹配路径
+// matchPath 匹配路径（前缀匹配，无路径限制时匹配所有）
 func matchPath(path string, proc Processor) bool {
 	paths := proc.GetPaths()
 	if len(paths) == 0 {
-		return true // 无路径限制，匹配所有
+		return true
 	}
-
-	matchMode := proc.MatchMode
-	if matchMode == "" {
-		matchMode = "prefix" // 默认前缀匹配
-	}
-
 	for _, pattern := range paths {
-		switch matchMode {
-		case "exact":
-			if path == pattern {
-				return true
-			}
-		case "prefix":
-			if strings.HasPrefix(path, pattern) {
-				return true
-			}
-		case "regex":
-			// TODO: 实现正则匹配
-			if strings.HasPrefix(path, pattern) {
-				return true
-			}
+		if strings.HasPrefix(path, pattern) {
+			return true
 		}
 	}
 	return false
 }
 
-// MatchRoute 匹配路由规则
-func (l *ListenerConfig) MatchRoute(path string) *RouteRule {
-	for _, route := range l.Routes {
-		// 前缀匹配
-		if strings.HasPrefix(path, route.Path) {
-			return &route
+// MatchedPrefix 返回处理器中实际匹配到 path 的路径前缀
+func (p *Processor) MatchedPrefix(path string) string {
+	for _, pattern := range p.GetPaths() {
+		if strings.HasPrefix(path, pattern) {
+			return pattern
 		}
 	}
-	return nil
+	return ""
 }
 
 // validateTimeWindowConfig 验证时间窗口配置

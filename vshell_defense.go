@@ -386,8 +386,10 @@ func (v *VShellDefense) isHighEntropyData(data []byte) bool {
 	}
 
 	// 高熵值数据特征: 字节分布均匀
+	// 阈值取 1/2：ASCII 文本（如 HTTP 请求）唯一字节比例约 1/3，
+	// 均匀分布的加密数据接近 1，取中值避免误拦普通文本流量
 	uniqueBytes := len(counts)
-	expectedUnique := len(data) / 4 // 加密数据通常有很高的唯一字节比例
+	expectedUnique := len(data) / 2
 
 	return uniqueBytes >= expectedUnique
 }

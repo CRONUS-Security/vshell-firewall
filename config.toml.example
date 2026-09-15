@@ -43,7 +43,6 @@ name = "http_proxy"              # 监听器名称
 listen_port = ":8880"            # 监听端口
 backend_addr = "127.0.0.1:9991"  # 后端地址
 protocol = "tcp"                 # 后端协议类型: tcp (目前仅支持 TCP)
-                                 # TODO: 未来支持 kcp/udp, websocket
 
 # 超时配置
 [listeners.timeout]
@@ -51,55 +50,38 @@ enabled = true                   # 是否启用超时
 initial_read = 30                # 初始读取超时 (秒)，0 表示无限制
 connect_backend = 5              # 连接后端超时 (秒)，0 表示无限制
 
-# HTTP 处理器管道 - 按顺序匹配处理
-# 路径重写示例
-[[listeners.http.processor]]
-path = "/patch_slt"
-match_mode = "prefix"            # 匹配模式: prefix (前缀), exact (精确), regex (正则)
-action = "rewrite"               # 动作: allow, drop, rewrite, file, proxy
-rewrite_to = "/slt"
+# HTTP 处理器管道 - 按顺序匹配，第一个匹配的生效（前缀匹配）
+# 核心场景：对外仅暴露虚拟路径，真实路径 /swt、/slt 直接丢弃
 
-[[listeners.http.processor]]
-path = "/patch_swt"
-match_mode = "prefix"
-action = "rewrite"
-rewrite_to = "/swt"
+# 虚拟路径：重写为后端真实路径后转发
+# 仅在需要保留 stage 模式上线的情况下使用，不推荐开启
+# [[listeners.http.processor]]
+# path = "/patch_swt"
+# 动作: rewrite (重写转发), drop (拦截), file (静态页面), allow (直接转发)
+# action = "rewrite"
+# rewrite_to = "/swt"
 
-# 路径过滤示例
+# [[listeners.http.processor]]
+# path = "/patch_slt"
+# action = "rewrite"
+# rewrite_to = "/slt"
+
+# 真实路径直接访问则拦截
 [[listeners.http.processor]]
-path = "/slt"
-match_mode = "prefix"
+path = ["/swt", "/slt"]           # 支持 string 或数组
 action = "drop"
-response = "404"                 # 响应类型: 404, 403, 502, close
+response = "404"                  # 响应类型: 404, 403, 502, close
 
+# 其余所有 HTTP 请求（含 / 根路径）返回伪装页面（隐匿）
+# 未指定 file 参数时，默认使用编译内建的 resource/index.html 静态资源
 [[listeners.http.processor]]
-path = "/swt"
-match_mode = "prefix"
+path = "/"
+action = "file"
+# file = "./custom.html"          # 可选：指定自定义页面文件覆盖内建资源
+
+# TCP 处理器 - 拒绝所有非 HTTP 的 TCP 连接
+[[listeners.tcp.processor]]
 action = "drop"
-response = "404"
-
-# 允许特定路径
-[[listeners.http.processor]]
-path = "/admin"
-match_mode = "prefix"
-action = "allow"                 # 转发到后端
-
-# 文件响应示例
-[[listeners.http.processor]]
-path = ["/", "/index"]           # 支持多个路径
-action = "file"                  # 返回文件内容
-file = "./index.html"
-
-# TCP 处理器 - 处理非 HTTP 的 TCP 连接
-[[listeners.tcp.processor]]
-action = "drop"                  # 拒绝所有非 HTTP 的 TCP 连接
-response = "close"
-
-
-# TCP 处理器 - 处理非 HTTP 的 TCP 连接
-[[listeners.tcp.processor]]
-action = "drop"                  # 拒绝所有非 HTTP 的 TCP 连接
-response = "close"
 
 
 # 第二个监听器示例 - 纯 TCP 转发，无超时限制
