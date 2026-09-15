@@ -47,7 +47,6 @@ type ListenerConfig struct {
 	Protocol    string              `toml:"protocol"` // tcp
 	Timeout     TimeoutConfig       `toml:"timeout"`
 	HTTP        HTTPProcessorConfig `toml:"http"`
-	TCP         TCPProcessorConfig  `toml:"tcp"`
 }
 
 // TimeoutConfig 超时配置
@@ -62,15 +61,10 @@ type HTTPProcessorConfig struct {
 	Processors []Processor `toml:"processor"`
 }
 
-// TCPProcessorConfig TCP 处理器配置
-type TCPProcessorConfig struct {
-	Processors []Processor `toml:"processor"`
-}
-
-// Processor 处理器规则
+// Processor 处理器规则（仅用于 HTTP 请求，raw TCP 直接转发后端）
 type Processor struct {
 	Path      interface{} `toml:"path"`       // string 或 []string（前缀匹配）
-	Action    string      `toml:"action"`     // drop, rewrite, file (HTTP); allow, drop (TCP)
+	Action    string      `toml:"action"`     // drop, rewrite, file, allow
 	Response  string      `toml:"response"`   // 404, 403, 502, close (用于 drop)
 	RewriteTo string      `toml:"rewrite_to"` // 路径重写目标 (用于 rewrite)
 	File      string      `toml:"file"`       // 文件路径 (用于 file，为空则使用内建伪装页面)
@@ -176,14 +170,7 @@ func (c *Config) Validate() error {
 
 		// 验证 HTTP 处理器
 		for j, proc := range listener.HTTP.Processors {
-			if err := validateProcessor(proc, i, "http", j); err != nil {
-				return err
-			}
-		}
-
-		// 验证 TCP 处理器
-		for j, proc := range listener.TCP.Processors {
-			if err := validateProcessor(proc, i, "tcp", j); err != nil {
+			if err := validateProcessor(proc, i, j); err != nil {
 				return err
 			}
 		}
@@ -192,12 +179,12 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// validateProcessor 验证处理器配置
-func validateProcessor(proc Processor, listenerIdx int, processorType string, procIdx int) error {
+// validateProcessor 验证 HTTP 处理器配置
+func validateProcessor(proc Processor, listenerIdx int, procIdx int) error {
 	validActions := map[string]bool{"allow": true, "drop": true, "rewrite": true, "file": true}
 	if !validActions[proc.Action] {
-		return fmt.Errorf("listener[%d].%s.processor[%d]: action must be one of: allow, drop, rewrite, file",
-			listenerIdx, processorType, procIdx)
+		return fmt.Errorf("listener[%d].http.processor[%d]: action must be one of: allow, drop, rewrite, file",
+			listenerIdx, procIdx)
 	}
 
 	// 验证 action 特定的配置
@@ -205,13 +192,13 @@ func validateProcessor(proc Processor, listenerIdx int, processorType string, pr
 	case "drop":
 		validResponses := map[string]bool{"404": true, "403": true, "502": true, "close": true}
 		if proc.Response != "" && !validResponses[proc.Response] {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: response must be one of: 404, 403, 502, close",
-				listenerIdx, processorType, procIdx)
+			return fmt.Errorf("listener[%d].http.processor[%d]: response must be one of: 404, 403, 502, close",
+				listenerIdx, procIdx)
 		}
 	case "rewrite":
 		if proc.RewriteTo == "" {
-			return fmt.Errorf("listener[%d].%s.processor[%d]: rewrite_to is required for rewrite action",
-				listenerIdx, processorType, procIdx)
+			return fmt.Errorf("listener[%d].http.processor[%d]: rewrite_to is required for rewrite action",
+				listenerIdx, procIdx)
 		}
 	}
 
@@ -240,20 +227,12 @@ func (p *Processor) GetPaths() []string {
 	}
 }
 
-// MatchProcessor 匹配 HTTP 处理器
+// MatchHTTPProcessor 匹配 HTTP 处理器
 func (l *ListenerConfig) MatchHTTPProcessor(path string) *Processor {
 	for _, proc := range l.HTTP.Processors {
 		if matchPath(path, proc) {
 			return &proc
 		}
-	}
-	return nil
-}
-
-// MatchTCPProcessor 获取 TCP 处理器
-func (l *ListenerConfig) MatchTCPProcessor() *Processor {
-	if len(l.TCP.Processors) > 0 {
-		return &l.TCP.Processors[0]
 	}
 	return nil
 }

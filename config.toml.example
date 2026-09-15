@@ -1,85 +1,31 @@
-# vshell-firewall 配置文件示例
-# 支持 HTTP 和 TCP 处理器管道
-
 # 全局配置
 [global]
-buffer_size = 32768  # 缓冲区大小 (字节)
-log_level = "info"   # 日志级别: debug, info, warn, error
-log_file = "./vshell-firewall.log"  # 日志文件路径，为空则只输出到控制台
+buffer_size = 32768
+log_level = "info"
+log_file = "./vshell-firewall.log"
 
 # GeoIP 配置
 [global.geoip]
-enabled = false                              # 是否启用 GeoIP 检查
-database_path = "./GeoLite2-Country.mmdb"    # GeoIP 数据库路径 (下载: https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)
-block_regions = ["US", "EU"]                 # 拦截的地区列表
-# 支持国家代码（如 US, CN, GB）和大洲代码（如 EU, AS, NA, SA, AF, OC）
-# EU 会自动匹配所有欧洲国家，包括：DE, FR, IT, ES, GB 等
+enabled = false
+database_path = "./GeoLite2-Country.mmdb"
+block_regions = ["US", "EU"]
 
 # 时间窗口配置
 [global.time_window]
-enabled = false          # 是否启用时间窗口过滤
-timezone = "UTC"         # 时区设置，如 "UTC", "Asia/Shanghai", "America/New_York"
-start_time = "00:00"     # 允许连接的开始时间 (HH:MM 格式)
-end_time = "11:00"       # 允许连接的结束时间 (HH:MM 格式)
-                         # 窗口外时，现有连接保持，但新的 TCP 连接请求会被丢弃
+enabled = false
+timezone = "UTC"
+start_time = "00:00"
+end_time = "11:00"
 
 # 监听端口配置 - 可以配置多个
 [[listeners]]
-name = "http_proxy"              # 监听器名称
-listen_port = ":8880"            # 监听端口
-backend_addr = "127.0.0.1:9991"  # 后端地址
-protocol = "tcp"                 # 后端协议类型: tcp (目前仅支持 TCP)
+name = "listener-8880-9991"
+listen_port = ":8080"
+backend_addr = "127.0.0.1:8081"
+protocol = "tcp"
 
 # 超时配置
 [listeners.timeout]
 enabled = true                   # 是否启用超时
 initial_read = 30                # 初始读取超时 (秒)，0 表示无限制
 connect_backend = 5              # 连接后端超时 (秒)，0 表示无限制
-
-# HTTP 处理器管道 - 按顺序匹配，第一个匹配的生效（前缀匹配）
-# 核心场景：对外仅暴露虚拟路径，真实路径 /swt、/slt 直接丢弃
-
-# 虚拟路径：重写为后端真实路径后转发
-# 仅在需要保留 stage 模式上线的情况下使用，不推荐开启
-# [[listeners.http.processor]]
-# path = "/patch_swt"
-# 动作: rewrite (重写转发), drop (拦截), file (静态页面), allow (直接转发)
-# action = "rewrite"
-# rewrite_to = "/swt"
-
-# [[listeners.http.processor]]
-# path = "/patch_slt"
-# action = "rewrite"
-# rewrite_to = "/slt"
-
-# 真实路径直接访问则拦截
-[[listeners.http.processor]]
-path = ["/swt", "/slt"]           # 支持 string 或数组
-action = "drop"
-response = "404"                  # 响应类型: 404, 403, 502, close
-
-# 其余所有 HTTP 请求（含 / 根路径）返回伪装页面（隐匿）
-# 未指定 file 参数时，默认使用编译内建的 resource/index.html 静态资源
-[[listeners.http.processor]]
-path = "/"
-action = "file"
-# file = "./custom.html"          # 可选：指定自定义页面文件覆盖内建资源
-
-# TCP 处理器 - 拒绝所有非 HTTP 的 TCP 连接
-[[listeners.tcp.processor]]
-action = "drop"
-
-
-# 第二个监听器示例 - 纯 TCP 转发，无超时限制
-[[listeners]]
-name = "tcp_longconn"
-listen_port = ":9880"
-backend_addr = "127.0.0.1:9992"
-protocol = "tcp"                 # TCP 协议
-
-[listeners.timeout]
-enabled = false                  # 禁用超时，适合长连接
-
-# TCP 处理器 - 允许所有 TCP 连接
-[[listeners.tcp.processor]]
-action = "allow"                 # 转发到后端

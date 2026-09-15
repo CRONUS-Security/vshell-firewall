@@ -203,12 +203,20 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 		// 匹配 HTTP 处理器
 		processor := cfg.MatchHTTPProcessor(path)
 		if processor == nil {
-			// 没有匹配的处理器，返回内建伪装页面（隐匿）
-			if global.LogLevel == "debug" || global.LogLevel == "info" {
-				log.Printf("[%s] HTTP request to '%s' from %s matched no processor, serving stealth page",
-					cfg.Name, path, clientConn.RemoteAddr())
+			// 模拟真实 nginx 行为：仅根路径返回伪装页面，其余路径一律 404
+			if isStealthPath(path) {
+				if global.LogLevel == "debug" || global.LogLevel == "info" {
+					log.Printf("[%s] HTTP request to '%s' from %s, serving stealth page",
+						cfg.Name, path, clientConn.RemoteAddr())
+				}
+				serveStatic(clientConn, "", cfg.Name)
+			} else {
+				if global.LogLevel == "debug" || global.LogLevel == "info" {
+					log.Printf("[%s] HTTP request to '%s' from %s, responding 404",
+						cfg.Name, path, clientConn.RemoteAddr())
+				}
+				sendErrorResponse(clientConn, "404")
 			}
-			serveStatic(clientConn, "", cfg.Name)
 			return
 		}
 
@@ -241,28 +249,12 @@ func handleConnection(clientConn net.Conn, cfg ListenerConfig, global GlobalConf
 			forwardConnection(clientConn, reader, initialData, path, cfg, global, "HTTP", processor)
 		}
 	} else {
-		// TCP 协议处理
-		processor := cfg.MatchTCPProcessor()
-		if processor == nil {
-			log.Printf("[%s] No TCP processor configured, dropping connection from %s",
-				cfg.Name, clientConn.RemoteAddr())
-			return
-		}
-
+		// 非 HTTP 流量（raw TCP）：VShell 通信依赖 raw TCP，直接转发到后端
 		if global.LogLevel == "debug" || global.LogLevel == "info" {
-			log.Printf("[%s] TCP connection from %s, action: %s",
-				cfg.Name, clientConn.RemoteAddr(), processor.Action)
-		}
-
-		switch processor.Action {
-		case "drop":
-			log.Printf("[%s] TCP connection from %s blocked by processor",
+			log.Printf("[%s] TCP connection from %s, forwarding to backend",
 				cfg.Name, clientConn.RemoteAddr())
-			return
-
-		case "allow":
-			forwardConnection(clientConn, reader, initialData, "", cfg, global, "TCP", processor)
 		}
+		forwardConnection(clientConn, reader, initialData, "", cfg, global, "TCP", nil)
 	}
 }
 
@@ -383,6 +375,15 @@ func extractHTTPPath(requestLine string) string {
 	return ""
 }
 
+// isStealthPath 判断路径是否应返回内建伪装页面
+// 模拟 nginx 默认行为：index.html 仅在根路径与 /index.html 返回
+func isStealthPath(path string) bool {
+	if i := strings.Index(path, "?"); i >= 0 {
+		path = path[:i]
+	}
+	return path == "/" || path == "/index.html"
+}
+
 // rewriteHTTPPath 重写 HTTP 请求路径
 func rewriteHTTPPath(data []byte, fromPath, toPath string) []byte {
 	// 查找请求行的结束位置
@@ -425,35 +426,32 @@ func rewriteHTTPPath(data []byte, fromPath, toPath string) []byte {
 	return data
 }
 
-// sendErrorResponse 发送错误响应
+// sendErrorResponse 发送错误响应（模拟 nginx 默认错误页与响应头）
 func sendErrorResponse(conn net.Conn, responseType string) {
-	var response string
+	var status, reason string
 
 	switch responseType {
 	case "404":
-		response = "HTTP/1.1 404 Not Found\r\n" +
-			"Content-Type: text/plain\r\n" +
-			"Content-Length: 9\r\n" +
-			"Connection: close\r\n" +
-			"\r\n" +
-			"Not Found"
+		status, reason = "404", "Not Found"
 	case "403":
-		response = "HTTP/1.1 403 Forbidden\r\n" +
-			"Content-Type: text/plain\r\n" +
-			"Content-Length: 9\r\n" +
-			"Connection: close\r\n" +
-			"\r\n" +
-			"Forbidden"
+		status, reason = "403", "Forbidden"
 	case "502":
-		response = "HTTP/1.1 502 Bad Gateway\r\n" +
-			"Content-Type: text/plain\r\n" +
-			"Content-Length: 11\r\n" +
-			"Connection: close\r\n" +
-			"\r\n" +
-			"Bad Gateway"
+		status, reason = "502", "Bad Gateway"
 	default:
 		return
 	}
+
+	body := fmt.Sprintf("<html>\r\n<head><title>%s %s</title></head>\r\n"+
+		"<body>\r\n<center><h1>%s %s</h1></center>\r\n"+
+		"<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n", status, reason, status, reason)
+
+	response := fmt.Sprintf("HTTP/1.1 %s %s\r\n"+
+		"Server: nginx\r\n"+
+		"Date: %s\r\n"+
+		"Content-Type: text/html\r\n"+
+		"Content-Length: %d\r\n"+
+		"Connection: close\r\n"+
+		"\r\n%s", status, reason, time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"), len(body), body)
 
 	conn.Write([]byte(response))
 }
@@ -479,10 +477,11 @@ func serveStatic(conn net.Conn, filePath string, listenerName string) {
 	// 构造 HTTP 响应（伪装 nginx 服务器）
 	response := fmt.Sprintf("HTTP/1.1 200 OK\r\n"+
 		"Server: nginx\r\n"+
+		"Date: %s\r\n"+
 		"Content-Type: %s\r\n"+
 		"Content-Length: %d\r\n"+
 		"Connection: close\r\n"+
-		"\r\n", contentType, len(data))
+		"\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"), contentType, len(data))
 
 	conn.Write([]byte(response))
 	conn.Write(data)

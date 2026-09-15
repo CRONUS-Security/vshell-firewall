@@ -1,0 +1,82 @@
+# vshell-firewall 配置文件示例
+# 支持 HTTP 和 TCP 处理器管道
+
+# 全局配置
+[global]
+buffer_size = 32768  # 缓冲区大小 (字节)
+log_level = "info"   # 日志级别: debug, info, warn, error
+log_file = "./vshell-firewall.log"  # 日志文件路径，为空则只输出到控制台
+
+# GeoIP 配置
+[global.geoip]
+enabled = false                              # 是否启用 GeoIP 检查
+database_path = "./GeoLite2-Country.mmdb"    # GeoIP 数据库路径 (下载: https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)
+block_regions = ["US", "EU"]                 # 拦截的地区列表
+# 支持国家代码（如 US, CN, GB）和大洲代码（如 EU, AS, NA, SA, AF, OC）
+# EU 会自动匹配所有欧洲国家，包括：DE, FR, IT, ES, GB 等
+
+# 时间窗口配置
+[global.time_window]
+enabled = false          # 是否启用时间窗口过滤
+timezone = "UTC"         # 时区设置，如 "UTC", "Asia/Shanghai", "America/New_York"
+start_time = "00:00"     # 允许连接的开始时间 (HH:MM 格式)
+end_time = "11:00"       # 允许连接的结束时间 (HH:MM 格式)
+                         # 窗口外时，现有连接保持，但新的 TCP 连接请求会被丢弃
+
+# 监听端口配置 - 可以配置多个
+[[listeners]]
+name = "listener-8080-8081"              # 监听器名称
+listen_port = ":8080"            # 监听端口
+backend_addr = "127.0.0.1:8081"  # 后端地址
+protocol = "tcp"                 # 后端协议类型: tcp (目前仅支持 TCP)
+
+# 超时配置
+[listeners.timeout]
+enabled = true                   # 是否启用超时
+initial_read = 30                # 初始读取超时 (秒)，0 表示无限制
+connect_backend = 5              # 连接后端超时 (秒)，0 表示无限制
+
+# HTTP 处理器管道 - 按顺序匹配，第一个匹配的生效（前缀匹配）
+# 默认行为模拟真实 nginx：
+#   - 根路径 / 与 /index.html 返回编译内建的伪装页面（resource/index.html）
+#   - 其余所有 HTTP 路径一律返回 404
+# 因此 /swt、/slt 等真实路径无需任何规则即返回 404，与 nginx 无指纹差异
+
+# 动作说明: rewrite (重写转发), drop (拦截), file (静态页面), allow (直接转发)
+
+# 可选：虚拟路径重写转发，仅在需要保留 stage 模式一键上线时启用
+# [[listeners.http.processor]]
+# path = "/patch_swt"
+# action = "rewrite"
+# rewrite_to = "/swt"
+
+# [[listeners.http.processor]]
+# path = "/patch_slt"
+# action = "rewrite"
+# rewrite_to = "/slt"
+
+# 可选：对特定路径定制拦截响应（默认未匹配即 404，通常无需配置）
+# [[listeners.http.processor]]
+# path = ["/swt", "/slt"]           # 支持 string 或数组
+# action = "drop"
+# response = "403"                  # 响应类型: 404, 403, 502, close
+
+# 可选：自定义根路径页面，覆盖内建资源
+# 注意：前缀匹配下 path = "/" 会匹配所有路径，仅在全站自定义页面时使用
+# [[listeners.http.processor]]
+# path = "/"
+# action = "file"
+# file = "./custom.html"
+
+# raw TCP 流量（非 HTTP）：VShell 通信依赖 raw TCP，无需配置，直接转发到后端
+
+
+# 第二个监听器示例 - 纯 TCP 转发，无超时限制
+[[listeners]]
+name = "listener-443-9443"
+listen_port = ":443"
+backend_addr = "127.0.0.1:9443"
+protocol = "tcp"                 # TCP 协议
+
+[listeners.timeout]
+enabled = false                  # 禁用超时，适合长连接
